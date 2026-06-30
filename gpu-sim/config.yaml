@@ -1,0 +1,67 @@
+# gpu-sim 主配置
+# 用法：cp config.example.yaml config.yaml，按需修改后 make gen && make install
+# 注释行以 # 开头；空字段可省略整节
+
+# —— 基础 ——
+namespace: gpu-sim
+releaseName: fake-gpu-operator
+
+# —— 节点列表 ——
+# 相同 gpu{product,count,memoryMiB} 的节点会被合并到同一 nodePool；
+# 不同规格则生成多个 pool。节点名必须以小写字母或数字开头，符合 RFC1123。
+nodes:
+  - name: kwok-gpu-a
+    # 可选：给 KWOK 节点打 taint，调度时需要 tolerations
+    taints:
+      - key: kwok.x-k8s.io/node
+        value: fake
+        effect: NoSchedule
+    # GPU 规格（写入 Helm values 的 nodePool 配置）
+    gpu:
+      product: NVIDIA A100-SXM4-40GB
+      count: 2
+      memoryMiB: 40960
+      # 仅 metadata，运行时不被消费
+      tflopsFP32: 19.5
+
+  - name: kwok-gpu-b
+    taints:
+      - key: kwok.x-k8s.io/node
+        value: fake
+        effect: NoSchedule
+    gpu:
+      product: NVIDIA H100 80GB HBM3
+      count: 4
+      memoryMiB: 81920
+      tflopsFP32: 51.0
+
+# —— 加速器（可选） ——
+# 全部字段都可省略，省略后走默认上游。
+# 内置 daocloud 镜像便于国内环境；可整体覆盖或追加。
+accelerator:
+  # 容器镜像仓库替换表
+  # 规则：按 source 字段做最长前缀匹配；命中则整段前缀替换为 target
+  # 影响范围：生成的 values.yaml 中所有 *.image.repository 字段
+  imageRegistryMap:
+    - source: ghcr.io
+      target: ghcr.m.daocloud.io
+    - source: docker.io
+      target: docker.m.daocloud.io
+    - source: k8s.gcr.io
+      target: k8s-gcr.m.daocloud.io
+    - source: registry.k8s.io
+      target: k8s-gcr.m.daocloud.io
+
+  # Helm OCI 仓库替换（用于拉 fake-gpu-operator chart）
+  # 留空：走 Chart.yaml 默认的 oci://ghcr.io/run-ai/fake-gpu-operator
+  # 配后：install.sh 会用 `helm pull` 从该 URL 拉取 chart，跳过 `helm dependency update`
+  # 注意：daocloud 镜像的 OCI 仓库白名单不含 run-ai/fake-gpu-operator，留空走上游更稳
+  helmOCIRepository: ""
+
+  # KWOK manifest 下载基址
+  # 留空：走官方 https://github.com/kubernetes-sigs/kwok/releases/download
+  # 用于下载 kwok.yaml 和 stage-fast.yaml
+  kwokBaseURL: https://files.m.daocloud.io/github.com/kubernetes-sigs/kwok/releases/download
+
+  # KWOK 版本（任意 release tag）
+  kwokVersion: v0.7.0

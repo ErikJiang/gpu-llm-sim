@@ -1,0 +1,33 @@
+# shadow-pod.template.yaml
+# One Pod per fake GPU slot. Used only to drive fake-gpu-operator metrics on KWOK nodes.
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: gpu-load-{{NODE_NAME}}-{{GPU_INDEX}}
+  namespace: {{WORKLOAD_NAMESPACE}}
+  labels:
+    app: gpu-sim-shadow
+    run.ai/simulated-gpu-node-pool: {{POOL_NAME}}
+    gpu-llm-sim/release: {{MODEL_RELEASE}}
+    gpu-llm-sim/gpu-index: "{{GPU_INDEX}}"
+  annotations:
+    run.ai/simulated-gpu-utilization: "{{WORKLOAD_UTIL}}"
+    run.ai/simulated-gpu-memory: "{{WORKLOAD_MEM_USED}}"
+spec:
+  restartPolicy: Never
+  nodeName: {{NODE_NAME}}
+  tolerations:
+  - key: kwok.x-k8s.io/node
+    value: fake
+    effect: NoSchedule
+  - key: nvidia.com/gpu
+    operator: Exists
+    effect: NoSchedule
+  containers:
+  - name: pause
+    image: {{WORKLOAD_IMAGE}}
+    resources:
+      limits:
+        nvidia.com/gpu: 1
+    command: [ "sh", "-c", "echo gpu-sim shadow {{MODEL_RELEASE}} on {{NODE_NAME}} gpu {{GPU_INDEX}} && sleep 86400" ]

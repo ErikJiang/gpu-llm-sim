@@ -1,0 +1,16 @@
+# generated outputs
+generated/
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# os
+.DS_Store
+
+# editor
+.idea/
+.vscode/
+*.swp

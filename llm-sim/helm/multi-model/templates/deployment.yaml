@@ -1,0 +1,140 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "multi-model.fullname" . }}
+  labels:
+    {{- include "multi-model.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "multi-model.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print .Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "multi-model.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+      # vLLM render sidecar - handles tokenization via HTTP (vllm launch render).
+      # restartPolicy: Always makes this a native sidecar (K8s 1.29+):
+      # the simulator will not start until this container's readinessProbe passes.
+      # vllm/vllm-openai-cpu image does not bundle `modelscope`, so we pip install it
+      # on first boot. The package is cached on the image's writable layer for the
+      # Pod's lifetime (we accept ~30-60s extra cold start).
+      - name: vllm-render
+        image: {{ .Values.vllmRender.image }}
+        imagePullPolicy: {{ .Values.vllmRender.imagePullPolicy }}
+        restartPolicy: Always
+        command: ["/bin/sh", "-c"]
+        args:
+          - >-
+            pip install --quiet --no-cache-dir 'modelscope>=1.18.1' &&
+            exec vllm launch render {{ .Values.config.model | quote }} --port={{ .Values.vllmRender.port }} --trust-remote-code
+        env:
+          # 切到 ModelScope Hub：vllm 内部 model loader 改从 modelscope.cn 拉取
+          - name: VLLM_USE_MODELSCOPE
+            value: "true"
+          # ModelScope 缓存路径（容器内）
+          - name: MODELSCOPE_CACHE
+            value: {{ .Values.vllmRender.modelScopeCache | default "/root/.cache/modelscope" | quote }}
+          # 兼容旧字段：HF_TOKEN 在 ModelScope 上不强制需要，但保留以便少数 gated 仓库
+          - name: HF_TOKEN
+            value: {{ .Values.env.HF_TOKEN | default "" | quote }}
+        ports:
+        - name: http
+          containerPort: {{ .Values.vllmRender.port }}
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: {{ .Values.vllmRender.port }}
+          initialDelaySeconds: 300
+          periodSeconds: 30
+          failureThreshold: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: {{ .Values.vllmRender.port }}
+          initialDelaySeconds: 180
+          periodSeconds: 10
+          failureThreshold: 5
+      containers:
+        - name: {{ .Chart.Name }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --config
+            - /config/config.yaml
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: metadata.namespace
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            {{- range $k, $v := .Values.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: /config
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "multi-model.fullname" . }}-config
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

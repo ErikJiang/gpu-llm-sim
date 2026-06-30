@@ -1,0 +1,39 @@
+# demo-pod.template.yaml
+# gpu-sim demo workload template; demo.sh generates one manifest per KWOK node.
+# Placeholders (double braces, matched by demo.sh sed):
+#   {{NODE_NAME}}       - target KWOK node name
+#   {{POOL_NAME}}       - node pool
+#   {{DEMO_UTIL}}        - fgo annotation min-max (default 30-50)
+#   {{DEMO_MEM_USED}}   - fgo annotation min-max in MiB (default 1000-2000)
+#   {{GPU_REQUEST}}     - requested fake GPU count
+#   {{DEMO_IMAGE}}      - pod image
+#   {{DEMO_NAMESPACE}}   - pod namespace
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: demo-gpu-{{NODE_NAME}}
+  namespace: {{DEMO_NAMESPACE}}
+  labels:
+    app: gpu-sim-demo
+    run.ai/simulated-gpu-node-pool: {{POOL_NAME}}
+  annotations:
+    run.ai/simulated-gpu-utilization: "{{DEMO_UTIL}}"
+    run.ai/simulated-gpu-memory: "{{DEMO_MEM_USED}}"
+spec:
+  restartPolicy: Never
+  nodeName: {{NODE_NAME}}
+  tolerations:
+  - key: kwok.x-k8s.io/node
+    value: fake
+    effect: NoSchedule
+  - key: nvidia.com/gpu
+    operator: Exists
+    effect: NoSchedule
+  containers:
+  - name: pause
+    image: {{DEMO_IMAGE}}
+    resources:
+      limits:
+        nvidia.com/gpu: {{GPU_REQUEST}}
+    command: [ "sh", "-c", "echo gpu-sim demo on {{NODE_NAME}} && sleep 86400" ]

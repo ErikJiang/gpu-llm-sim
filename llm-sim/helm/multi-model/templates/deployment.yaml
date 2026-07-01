@@ -34,7 +34,7 @@ spec:
       # vLLM render sidecar - handles tokenization via HTTP (vllm launch render).
       # restartPolicy: Always makes this a native sidecar (K8s 1.29+):
       # the simulator will not start until this container's readinessProbe passes.
-      # vllm/vllm-openai-cpu image does not bundle `modelscope`, so we pip install it
+      # vLLM OpenAI CPU image does not bundle `modelscope`, so we pip install it
       # on first boot. The package is cached on the image's writable layer for the
       # Pod's lifetime (we accept ~30-60s extra cold start).
       - name: vllm-render
@@ -43,9 +43,16 @@ spec:
         restartPolicy: Always
         command: ["/bin/sh", "-c"]
         args:
+          # 只下载 tokenizer + 模型 config 元数据（约 5-50MB），不要权重。
+          # `vllm launch render` 用 ModelConfig 校验目录，需要 config.json；
+          # 同时需要 tokenizer 相关文件才能 tokenize。
+          # allow_file_pattern 过滤掉 .safetensors/.bin/.gguf/.pt/.pth 权重，
+          # 避免动辄 1-12GB 的下载和对应带宽/OOM 风险。
           - >-
-            pip install --quiet --no-cache-dir 'modelscope>=1.18.1' &&
-            exec vllm launch render {{ .Values.config.model | quote }} --port={{ .Values.vllmRender.port }} --trust-remote-code
+            pip install --quiet --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ 'modelscope>=1.19.7' 'huggingface_hub>=1.5.0,<2.0' &&
+            MODEL_DIR=$(python -c "from modelscope import snapshot_download; print(snapshot_download('{{ .Values.config.model }}', allow_file_pattern=['config.json','generation_config.json','tokenizer.json','tokenizer_config.json','tokenizer.model','special_tokens_map.json','vocab.json','vocab.txt','merges.txt','added_tokens.json','*.tiktoken','*.py','*.model','chat_template*','*.md']))" 2>/dev/null || python -c "from modelscope import snapshot_download; print(snapshot_download('{{ .Values.config.model }}', allow_file_pattern=['*.json','*.py','*.tiktoken','*.model','*.txt','*.md']))") &&
+            echo "tokenizer ready at $MODEL_DIR" &&
+            exec vllm launch render "$MODEL_DIR" --port={{ .Values.vllmRender.port }} --trust-remote-code
         env:
           # 切到 ModelScope Hub：vllm 内部 model loader 改从 modelscope.cn 拉取
           - name: VLLM_USE_MODELSCOPE
@@ -59,6 +66,14 @@ spec:
         ports:
         - name: http
           containerPort: {{ .Values.vllmRender.port }}
+        # 显式 resources：vllm launch render 只做 tokenize，~300Mi 内存足够。
+        # 不要给太大，否则小集群 (3 schedulable nodes) 调度会失败。
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "200m"
+          limits:
+            memory: "2Gi"
         livenessProbe:
           httpGet:
             path: /health

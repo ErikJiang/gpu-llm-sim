@@ -5,17 +5,19 @@
 #
 # 可通过环境变量覆盖（约束 #4 镜像可替换）：
 #   NAMESPACE          K8s 命名空间（默认 default）
-#   SIM_IMAGE_REPO     llm-d-inference-sim 镜像仓库（默认 ghcr.io/llm-d/llm-d-inference-sim）
-#   SIM_IMAGE_TAG      llm-d-inference-sim 镜像 tag（默认 latest）
-#   VLLM_RENDER_IMAGE  initContainer 镜像（默认 vllm/vllm-openai-cpu:v0.21.0）
+#   GHCR_ACCELERATOR_REGISTRY       ghcr.io 加速地址（默认 ghcr.m.daocloud.io）
+#   DOCKER_IO_ACCELERATOR_REGISTRY  docker.io 加速地址（默认 m.daocloud.io/docker.io）
+#   SIM_IMAGE_REPO     llm-d-inference-sim 镜像仓库（默认 ${GHCR_ACCELERATOR_REGISTRY}/llm-d/llm-d-inference-sim）
+#   SIM_IMAGE_TAG      llm-d-inference-sim 镜像 tag（默认 v0.9.0）
+#   VLLM_RENDER_IMAGE  initContainer 镜像（默认 ${DOCKER_IO_ACCELERATOR_REGISTRY}/vllm/vllm-openai-cpu:v0.21.0）
 #   HF_TOKEN           可选；ModelScope 公开模型不需要，留空即可
 #   MODELSCOPE_CACHE   initContainer 内 ModelScope 缓存路径（默认 /root/.cache/modelscope）
 #   DEFAULT_PROFILE    模型未指定 profile 时使用（默认 balanced）
 #
 # 用法：
 #   ./install.sh
-#   SIM_IMAGE_REPO=registry.cn-hangzhou.aliyuncs.com/myacc/llm-d-inference-sim \
-#   SIM_IMAGE_TAG=v0.9.0 ./install.sh
+#   GHCR_ACCELERATOR_REGISTRY=registry.cn-hangzhou.aliyuncs.com/myacc \
+#   DOCKER_IO_ACCELERATOR_REGISTRY=registry.cn-hangzhou.aliyuncs.com/dockerhub ./install.sh
 #
 set -euo pipefail
 
@@ -25,10 +27,12 @@ CHART="$SCRIPT_DIR/helm/multi-model"
 MODELS_FILE="${MODELS_FILE:-$SCRIPT_DIR/models.env}"
 COMMON_MODELS_SH="${COMMON_MODELS_SH:-$SCRIPT_DIR/../scripts/models.sh}"
 
-# 镜像支持环境变量覆盖（约束 #4）
-: "${SIM_IMAGE_REPO:=ghcr.io/llm-d/llm-d-inference-sim}"
-: "${SIM_IMAGE_TAG:=latest}"
-: "${VLLM_RENDER_IMAGE:=vllm/vllm-openai-cpu:v0.21.0}"
+# 镜像默认走加速地址，也支持完整镜像环境变量覆盖（约束 #4）
+: "${GHCR_ACCELERATOR_REGISTRY:=ghcr.m.daocloud.io}"
+: "${DOCKER_IO_ACCELERATOR_REGISTRY:=m.daocloud.io/docker.io}"
+: "${SIM_IMAGE_REPO:=${GHCR_ACCELERATOR_REGISTRY}/llm-d/llm-d-inference-sim}"
+: "${SIM_IMAGE_TAG:=v0.9.0}"
+: "${VLLM_RENDER_IMAGE:=${DOCKER_IO_ACCELERATOR_REGISTRY}/vllm/vllm-openai-cpu:v0.21.0}"
 : "${HF_TOKEN:=}"
 : "${MODELSCOPE_CACHE:=/root/.cache/modelscope}"
 : "${DEFAULT_PROFILE:=balanced}"
@@ -69,11 +73,11 @@ set_profile_args() {
         --set config.maxNumSeqs=64
         --set-string config.prefillOverhead=20ms
         --set-string config.prefillTimePerToken=350us
-        --set-string config.prefillTimeStdDev=3ms
+        --set-string config.prefillTimeStdDev=80us
         --set config.interTokenLatency=15
         --set config.interTokenLatencyStdDev=2
         --set-string config.kvCacheTransferTimePerToken=12us
-        --set-string config.kvCacheTransferTimeStdDev=500us
+        --set-string config.kvCacheTransferTimeStdDev=3us
         --set-string config.timeFactorUnderLoad=1.5
         --set config.kvCacheSize=1024
         --set-string config.globalCacheHitThreshold=0.25
@@ -84,11 +88,11 @@ set_profile_args() {
         --set config.maxNumSeqs=96
         --set-string config.prefillOverhead=30ms
         --set-string config.prefillTimePerToken=250us
-        --set-string config.prefillTimeStdDev=5ms
+        --set-string config.prefillTimeStdDev=60us
         --set config.interTokenLatency=12
         --set config.interTokenLatencyStdDev=2
         --set-string config.kvCacheTransferTimePerToken=3us
-        --set-string config.kvCacheTransferTimeStdDev=200us
+        --set-string config.kvCacheTransferTimeStdDev=0.9us
         --set-string config.timeFactorUnderLoad=2.0
         --set config.kvCacheSize=2048
         --set-string config.globalCacheHitThreshold=0.35
@@ -99,11 +103,11 @@ set_profile_args() {
         --set config.maxNumSeqs=128
         --set-string config.prefillOverhead=80ms
         --set-string config.prefillTimePerToken=500us
-        --set-string config.prefillTimeStdDev=15ms
+        --set-string config.prefillTimeStdDev=120us
         --set config.interTokenLatency=25
         --set config.interTokenLatencyStdDev=4
         --set-string config.kvCacheTransferTimePerToken=8us
-        --set-string config.kvCacheTransferTimeStdDev=500us
+        --set-string config.kvCacheTransferTimeStdDev=2us
         --set-string config.timeFactorUnderLoad=3.0
         --set config.kvCacheSize=4096
         --set-string config.globalCacheHitThreshold=0.45

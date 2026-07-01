@@ -6,15 +6,15 @@
 
 | 字段 | 默认 | 说明 |
 | --- | --- | --- |
-| `image.repository` | `ghcr.io/llm-d/llm-d-inference-sim` | 主模拟器镜像仓库 |
-| `image.tag` | `latest` | 镜像 tag |
+| `image.repository` | `ghcr.m.daocloud.io/llm-d/llm-d-inference-sim` | 主模拟器镜像仓库 |
+| `image.tag` | `v0.9.0` | 镜像 tag |
 | `image.pullPolicy` | `IfNotPresent` | 拉取策略 |
 
 ## vllmRender（initContainer）
 
 | 字段 | 默认 | 说明 |
 | --- | --- | --- |
-| `vllmRender.image` | `vllm/vllm-openai-cpu:v0.21.0` | 只做 tokenization |
+| `vllmRender.image` | `m.daocloud.io/docker.io/vllm/vllm-openai-cpu:v0.21.0` | 只做 tokenization |
 | `vllmRender.imagePullPolicy` | `IfNotPresent` | 拉取策略 |
 | `vllmRender.port` | `8082` | main 容器通过 `render-url` 调用 |
 | `vllmRender.modelScopeCache` | `/root/.cache/modelscope` | 容器内缓存路径；可挂 hostPath/PVC 共享 |
@@ -59,7 +59,7 @@ insight.opentelemetry.io/metric-scrape: "true"
 | `config.kvCacheTransferLatencyStdDev` | `10` | KV cache 传输延迟抖动（毫秒） |
 | `config.prefillOverhead` | `30ms` | per-token prefill 固定开销 |
 | `config.prefillTimePerToken` | `250us` | 每个 prompt token 的 prefill 耗时 |
-| `config.prefillTimeStdDev` | `5ms` | prefill 抖动 |
+| `config.prefillTimeStdDev` | `60us` | prefill 抖动，需不超过 `config.prefillTimePerToken` 的 30% |
 | `config.kvCacheTransferTimePerToken` | `3us` | 每个 prompt token 的 KV cache 传输耗时 |
 | `config.kvCacheTransferTimeStdDev` | `200us` | KV cache 传输抖动 |
 | `config.timeFactorUnderLoad` | `2.0` | 并发负载下延迟放大系数 |

@@ -5,8 +5,8 @@
 replicaCount: 1
 
 image:
-  repository: ghcr.io/llm-d/llm-d-inference-sim
-  tag: latest
+  repository: ghcr.m.daocloud.io/llm-d/llm-d-inference-sim
+  tag: v0.9.0
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []
@@ -47,7 +47,7 @@ affinity: {}
 # Set VLLM_USE_MODELSCOPE=true in the container env to switch vLLM's model loader
 # from HuggingFace to modelscope.cn (faster / no auth for most Chinese models).
 vllmRender:
-  image: vllm/vllm-openai-cpu:v0.21.0
+  image: m.daocloud.io/docker.io/vllm/vllm-openai-cpu:v0.21.0
   imagePullPolicy: IfNotPresent
   port: 8082
   # 容器内 ModelScope 缓存路径；可改 hostPath/PVC 共享
@@ -74,9 +74,9 @@ config:
   kvCacheTransferLatencyStdDev: 10
   prefillOverhead: 30ms
   prefillTimePerToken: 250us
-  prefillTimeStdDev: 5ms
+  prefillTimeStdDev: 60us
   kvCacheTransferTimePerToken: 3us
-  kvCacheTransferTimeStdDev: 200us
+  kvCacheTransferTimeStdDev: 0.9us
   timeFactorUnderLoad: "2.0"
   enableKvcache: true
   kvCacheSize: 2048

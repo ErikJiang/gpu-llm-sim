@@ -38,7 +38,7 @@ llm-sim/
 
 - K8s 集群（kind/minikube/生产）
 - `kubectl`、`helm ≥ v3`
-- 节点能拉主镜像与 `vllm/vllm-openai-cpu:v0.21.0`（或加速器镜像）
+- 节点能拉主镜像与 `vllm/vllm-openai-cpu:v0.21.0`（默认使用 daocloud 加速器镜像）
 
 ### 部署
 
@@ -46,11 +46,10 @@ llm-sim/
 # 默认
 make install
 
-# 自定义命名空间 + 加速器镜像
+# 自定义命名空间 + 加速器地址
 NAMESPACE=llm-sim \
-SIM_IMAGE_REPO=ghcr.m.daocloud.io/llm-d/llm-d-inference-sim \
-SIM_IMAGE_TAG=v0.9.0 \
-VLLM_RENDER_IMAGE=m.daocloud.io/docker.io/vllm/vllm-openai-cpu:v0.21.0 \
+GHCR_ACCELERATOR_REGISTRY=ghcr.m.daocloud.io \
+DOCKER_IO_ACCELERATOR_REGISTRY=m.daocloud.io/docker.io \
 ./install.sh
 ```
 
@@ -87,9 +86,11 @@ Insight collector 启用 `insight.opentelemetry.io/*` 注解扫描后，自动�
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
 | `NAMESPACE` | `default` | K8s 命名空间 |
-| `SIM_IMAGE_REPO` | `ghcr.io/llm-d/llm-d-inference-sim` | 主容器镜像仓库 |
-| `SIM_IMAGE_TAG` | `latest` | 主容器镜像 tag |
-| `VLLM_RENDER_IMAGE` | `vllm/vllm-openai-cpu:v0.21.0` | initContainer 镜像 |
+| `GHCR_ACCELERATOR_REGISTRY` | `ghcr.m.daocloud.io` | `ghcr.io` 加速地址 |
+| `DOCKER_IO_ACCELERATOR_REGISTRY` | `m.daocloud.io/docker.io` | `docker.io` 加速地址 |
+| `SIM_IMAGE_REPO` | `${GHCR_ACCELERATOR_REGISTRY}/llm-d/llm-d-inference-sim` | 主容器镜像仓库；可直接覆盖完整 repo |
+| `SIM_IMAGE_TAG` | `v0.9.0` | 主容器镜像 tag |
+| `VLLM_RENDER_IMAGE` | `${DOCKER_IO_ACCELERATOR_REGISTRY}/vllm/vllm-openai-cpu:v0.21.0` | initContainer 镜像；可直接覆盖完整 image |
 | `MODELSCOPE_CACHE` | `/root/.cache/modelscope` | 容器内 ModelScope 缓存路径 |
 | `HF_TOKEN` | 空 | ModelScope 公开模型无需 |
 | `DEFAULT_PROFILE` | `balanced` | `models.env` 未指定 profile 时使用 |
@@ -100,6 +101,15 @@ Insight collector 启用 `insight.opentelemetry.io/*` 注解扫描后，自动�
 
 ```bash
 SIM_IMAGE_TAG=v0.9.1 ./install.sh
+```
+
+如需回源，可显式覆盖：
+
+```bash
+SIM_IMAGE_REPO=ghcr.io/llm-d/llm-d-inference-sim \
+SIM_IMAGE_TAG=latest \
+VLLM_RENDER_IMAGE=vllm/vllm-openai-cpu:v0.21.0 \
+./install.sh
 ```
 
 ### 新增模型

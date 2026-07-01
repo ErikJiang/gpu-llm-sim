@@ -17,7 +17,7 @@ make check
 make install-gpu
 
 # 3. 安装 LLM simulator
-make install-llm LLM_NAMESPACE=llm-sim
+make install-llm
 
 # 4. 每张 fake GPU 创建一个 shadow workload
 make apply-gpu-load

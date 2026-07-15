@@ -36,12 +36,12 @@ set-gpu-util: ## 更新 shadow workload util，例：WORKLOAD_UTIL=80-95 make se
 	WORKLOAD_NAMESPACE=$(WORKLOAD_NAMESPACE) $(GPU_DIR)/workload.sh set-util
 
 .PHONY: bench
-bench: ## 运行 LLM 压测，例：RPS=30 CONCURRENCY=32 DURATION=10m make bench
+bench: ## 运行 GPU 波动驱动；设置 SYNTHETIC_METRICS=false 才发送真实请求
 	$(MAKE) -C $(LLM_DIR) NAMESPACE=$(LLM_NAMESPACE) bench
 
 .PHONY: demo
 demo: install-gpu install-llm apply-gpu-load ## 推荐演示路径：GPU + LLM + shadow workload
-	@echo "Run benchmark: make bench RPS=30 CONCURRENCY=32 DURATION=10m"
+	@echo "Run benchmark: make bench DURATION=30m"
 
 .PHONY: uninstall
 uninstall: ## 清理 LLM release、shadow workload、gpu-sim 资源（保留 KWOK controller 默认行为）

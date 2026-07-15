@@ -83,6 +83,8 @@ log "  memory:  $WORKLOAD_MEM_USED (MiB)"
 log "  image:   $WORKLOAD_IMAGE"
 
 kubectl create namespace "$WORKLOAD_NAMESPACE" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+log "removing stale shadow pods before reconciling active GPU slots"
+kubectl delete pods -n "$WORKLOAD_NAMESPACE" -l app=gpu-sim-shadow --ignore-not-found --wait=true >/dev/null
 
 MODEL_TABLE="$(read_model_table "$MODELS_FILE")"
 if [ -z "$MODEL_TABLE" ]; then
@@ -105,7 +107,9 @@ with open('$GENERATED_DIR/node-inventory.json', encoding='utf-8') as f:
     inv = json.load(f)
 
 for node in sorted(inv['nodes'], key=lambda item: item['name']):
-    release = node['modelRelease']
+    release = node.get('modelRelease', '')
+    if not release:
+        continue
     if release not in models:
         raise SystemExit(f'modelRelease {release!r} is not defined in models.env')
     model = models[release]

@@ -8,7 +8,7 @@
 - 配置文件声明多节点（每节点指定 CPU / 内存 / 架构 / GPU / 模型映射 / utilization）
 - 一条命令完成安装：拉 fake-gpu-operator OCI chart → 装 KWOK → 装 fgo → 注入 KWOK 节点
 - 加速器/镜像替换入口：内置 daocloud 镜像作为国内网络默认
-- util 通过 shadow/demo pod 的 fgo annotation 驱动（temperature / power / 时变序列 v1 不支持）
+- util 通过 shadow/demo pod 的 fgo annotation 驱动；`llm-sim/bench.sh` 可按业务阶段联动更新各节点区间
 
 ---
 
@@ -70,7 +70,8 @@ namespace: gpu-sim                # K8s namespace
 releaseName: fake-gpu-operator    # helm release name
 
 nodes:                             # 节点列表
-  - name: kwok-h200-01             # 必填，RFC1123
+  - name: kwok-h200                # 必填，RFC1123 模板名
+    replicas: 6                    # 可选，展开为 kwok-h200-01..06
     cpu: 224
     memory: 2Ti
     architecture: amd64            # GH200 使用 arm64
@@ -88,20 +89,20 @@ nodes:                             # 节点列表
       utilization: 68-92
 ```
 
-`{product, count, memoryMiB}` 三元组相同的节点会被合并为同一 `nodePools.<name>`；不同则生成多个 pool。
+`replicas` 必须是正整数；省略时保持单节点原名。`{product, count, memoryMiB}` 三元组相同的节点会被合并为同一 `nodePools.<name>`；不同则生成多个 pool。省略整个 `workload` 表示 idle reserve，不创建 shadow Pod。
 
 默认拓扑：
 
 | 模型 release | 节点形态 | GPU 总数 | utilization |
 | --- | --- | ---: | --- |
-| `deepseek-v4-pro` | 1× HGX H200（8×141GB） | 8 | 68-92 |
-| `glm-51` | 8× GH200 NVL2 风格 arm64 节点（每节点 2×144GB） | 16 | 逐节点 56-90 |
-| `minimax-m27` | 1× 4-GPU H100 节点 | 4 | 66-91 |
-| `qwen35-122b-a10b` | 1× 4-GPU H100 节点 | 4 | 70-94 |
-| `qwen3-32b` | 1× 2-GPU A100 PCIe 节点 | 2 | 55-82 |
-| `baichuan2-13b-chat` | 1× 2-GPU V100 SXM2 节点 | 2 | 48-76 |
+| `deepseek-v4-pro` | 6× HGX H200（每节点 8×141GB） | 48 | 68-92 |
+| `glm-52` | 40× GH200 NVL2 风格 arm64 节点（每节点 2×144GB） | 80 | 58-88 |
+| `minimax-m3` | 4× 4-GPU H100 节点 | 16 | 66-91 |
+| `kimi-k27-code` | 4× 4-GPU H100 节点 | 16 | 64-90 |
+| `qwen37-plus` | 3× 4-GPU H100 节点 | 12 | 70-94 |
+| idle reserve | 5× 2-GPU A100 PCIe + 5× 2-GPU V100 SXM2 | 20 | 无 shadow Pod |
 
-合计 13 个节点、36 张 GPU。`modelRelease` 必须存在于 `llm-sim/models.env`；`workload.sh` 按该映射创建每卡一个 shadow Pod，不再 round-robin。
+合计 67 个节点、192 张 GPU，其中 172 张 active、20 张 idle。active `modelRelease` 必须存在于 `llm-sim/models.env`；`workload.sh` 每次 apply 会清理旧 shadow Pod，再按映射为 active GPU 每卡创建一个 Pod。
 
 完整配置示例见 [`config.example.yaml`](config.example.yaml)。
 
@@ -185,7 +186,16 @@ make workload-delete
 make demo-delete
 ```
 
-status-exporter 每 10s 在区间内随机一次（multi-node exporter 行为），dashboard 会看到曲线在区间内波动。
+status-exporter 每 10s 在区间内随机一次（multi-node exporter 行为），dashboard 会看到区间内噪声。运行根目录 `make bench` 时，bench 默认读取 `generated/node-inventory.json`，按 `quiet/normal/busy/spike` 阶段为每个节点更新不同区间；阶段持续 2–8 分钟，现有 `[5m]` 聚合仍可看到趋势变化。
+
+```bash
+# 先创建 shadow pod，再持续生成 LLM + GPU 相关联的指标
+make workload
+cd .. && RPS=20 CONCURRENCY=32 DURATION=30m make bench
+
+# 只需要静态区间时可关闭联动
+GPU_SHADOW_SYNC=false make bench
+```
 
 ---
 
@@ -217,7 +227,8 @@ make uninstall-all              # 完全卸载
 ## 限制（v1）
 
 - **不导出** `DCGM_FI_DEV_GPU_TEMP` / `POWER_USAGE` / `SM_CLOCK` 等 series
-- **不支持**时变多段序列（util/memory 是单段 min-max 内随机）
+- fake-gpu-operator 本身不接受时变序列；本项目通过 bench 在分钟级阶段切换时更新 util annotation
+- bench 停止后，util 会停留在最后一个阶段区间；可用 `make workload-util` 手动恢复
 - `tflopsFP32` 只写入 Node annotation/inventory，fake-gpu-operator 不用它计算指标
 - 模型与 GPU 的绑定是 dashboard/metrics 标签关系，真实 LLM Pod 不会调度到 KWOK 节点
 - **不做**真实推理 pod 调度联动（shadow pod 起来后才有 metrics）

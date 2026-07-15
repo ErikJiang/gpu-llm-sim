@@ -45,7 +45,7 @@ spec:
         args:
           # 只下载 tokenizer/processor/config/remote-code（单模型通常 2-30MB），不要权重。
           # `vllm launch render` 用 ModelConfig 校验目录，需要 config.json；
-          # Qwen3.5 是多模态模型，还需要 preprocessor config 才能初始化 processor。
+          # 多模态模型还需要 preprocessor config 才能初始化 processor。
           # allow + ignore 双重过滤权重，避免数十 GB 到 TB 级下载和 OOM 风险。
           - >-
             pip install --quiet --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ 'modelscope>=1.19.7' 'huggingface_hub>=1.5.0,<2.0' &&
@@ -60,7 +60,7 @@ spec:
           - name: MODELSCOPE_CACHE
             value: {{ .Values.vllmRender.modelScopeCache | default "/root/.cache/modelscope" | quote }}
           - name: MODEL_ID
-            value: {{ .Values.config.model | quote }}
+            value: {{ .Values.vllmRender.model | quote }}
           - name: MODEL_REVISION
             value: {{ .Values.vllmRender.modelRevision | default "master" | quote }}
           # 兼容旧字段：HF_TOKEN 在 ModelScope 上不强制需要，但保留以便少数 gated 仓库
@@ -91,6 +91,38 @@ spec:
           periodSeconds: 10
           failureThreshold: 5
       containers:
+        - name: synthetic-metrics
+          image: {{ .Values.vllmRender.image }}
+          imagePullPolicy: {{ .Values.vllmRender.imagePullPolicy }}
+          command: ["python3", "/synthetic/synthetic_metrics.py"]
+          env:
+            - name: SYNTHETIC_MODEL
+              value: {{ .Values.config.model | quote }}
+            - name: SYNTHETIC_WEIGHT
+              value: {{ .Values.syntheticMetrics.weight | quote }}
+            - name: SYNTHETIC_BASE_RPS
+              value: {{ .Values.syntheticMetrics.baseRps | quote }}
+            - name: SYNTHETIC_SEED
+              value: {{ .Values.config.seed | quote }}
+            - name: SYNTHETIC_PORT
+              value: {{ .Values.syntheticMetrics.port | quote }}
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.syntheticMetrics.port }}
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+          volumeMounts:
+            - name: config
+              mountPath: /synthetic
         - name: {{ .Chart.Name }}
           {{- with .Values.securityContext }}
           securityContext:

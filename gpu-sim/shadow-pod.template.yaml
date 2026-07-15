@@ -10,6 +10,7 @@ metadata:
     app: gpu-sim-shadow
     run.ai/simulated-gpu-node-pool: {{POOL_NAME}}
     gpu-llm-sim/release: {{MODEL_RELEASE}}
+    gpu-llm-sim/node: {{NODE_NAME}}
     gpu-llm-sim/gpu-index: "{{GPU_INDEX}}"
   annotations:
     run.ai/simulated-gpu-utilization: "{{WORKLOAD_UTIL}}"

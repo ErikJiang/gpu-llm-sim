@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import re
@@ -91,6 +92,23 @@ def load_yaml(path: Path) -> Any:
         return yaml.safe_load(f)
 
 
+def expand_nodes(nodes: list[dict]) -> list[dict]:
+    """Expand optional node-template replicas into concrete, independent nodes."""
+    expanded: list[dict] = []
+    for node in nodes:
+        if "replicas" not in node:
+            expanded.append(copy.deepcopy(node))
+            continue
+        replicas = node["replicas"]
+        width = max(2, len(str(replicas)))
+        for index in range(1, replicas + 1):
+            replica = copy.deepcopy(node)
+            replica["name"] = f"{node['name']}-{index:0{width}d}"
+            replica.pop("replicas")
+            expanded.append(replica)
+    return expanded
+
+
 def dump_yaml(obj: Any, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
@@ -131,12 +149,22 @@ def validate_config(cfg: dict) -> list[str]:
             errs.append(f"{prefix} must be a mapping")
             continue
         name = n.get("name")
+        replicas = n.get("replicas", 1)
+        replicas_valid = isinstance(replicas, int) and not isinstance(replicas, bool) and replicas >= 1
+        if not replicas_valid:
+            errs.append(f"{prefix}.replicas must be a positive integer")
         if not isinstance(name, str) or not re.match(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", name):
             errs.append(f"{prefix}.name '{name}' invalid (must be RFC1123)")
-        elif name in seen_names:
-            errs.append(f"{prefix}.name '{name}' duplicate")
         else:
-            seen_names.add(name)
+            width = max(2, len(str(replicas))) if replicas_valid else 2
+            names = [name] if "replicas" not in n or not replicas_valid else [
+                f"{name}-{index:0{width}d}" for index in range(1, replicas + 1)
+            ]
+            for expanded_name in names:
+                if expanded_name in seen_names:
+                    errs.append(f"{prefix}.name '{expanded_name}' duplicate after replica expansion")
+                else:
+                    seen_names.add(expanded_name)
 
         architecture = n.get("architecture", "amd64")
         if architecture not in ("amd64", "arm64"):
@@ -161,9 +189,9 @@ def validate_config(cfg: dict) -> list[str]:
             errs.append(f"{prefix}.gpu.memoryMiB must be >= 1")
 
         workload = n.get("workload")
-        if not isinstance(workload, dict):
+        if workload is not None and not isinstance(workload, dict):
             errs.append(f"{prefix}.workload must be a mapping")
-        else:
+        elif workload is not None:
             release = workload.get("modelRelease")
             if not isinstance(release, str) or not re.match(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", release):
                 errs.append(f"{prefix}.workload.modelRelease '{release}' invalid (must be RFC1123)")
@@ -351,7 +379,7 @@ def build_kwok_nodes(cfg: dict, node_to_pool: dict[str, str]) -> list[dict]:
         cpu = str(n.get("cpu", NODE_CPU))
         memory = str(n.get("memory", NODE_MEMORY))
         pods = str(n.get("pods", NODE_PODS))
-        workload = n["workload"]
+        workload = n.get("workload") or {}
         annotations = {
             "kwok.x-k8s.io/node": "fake",
             "gpu-llm-sim/gpu-product": gpu["product"],
@@ -373,7 +401,6 @@ def build_kwok_nodes(cfg: dict, node_to_pool: dict[str, str]) -> list[dict]:
                     "kubernetes.io/hostname": name,
                     "node.kubernetes.io/instance-type": slug(gpu["product"]),
                     "run.ai/simulated-gpu-node-pool": node_to_pool[name],
-                    "gpu-llm-sim/model-release": workload["modelRelease"],
                 },
                 "annotations": annotations,
             },
@@ -407,6 +434,8 @@ def build_kwok_nodes(cfg: dict, node_to_pool: dict[str, str]) -> list[dict]:
                 },
             },
         }
+        if workload.get("modelRelease"):
+            node["metadata"]["labels"]["gpu-llm-sim/model-release"] = workload["modelRelease"]
         manifests.append(node)
     return manifests
 
@@ -429,8 +458,8 @@ def build_node_inventory(cfg: dict, node_to_pool: dict[str, str]) -> dict:
             "gpuCount": gpu_count,
             "gpuMemoryMiB": gpu["memoryMiB"],
             "tflopsFP32": gpu.get("tflopsFP32"),
-            "modelRelease": n["workload"]["modelRelease"],
-            "utilization": n["workload"]["utilization"],
+            "modelRelease": (n.get("workload") or {}).get("modelRelease", ""),
+            "utilization": (n.get("workload") or {}).get("utilization", ""),
         })
     return {
         "namespace": cfg.get("namespace") or DEFAULT_NAMESPACE,
@@ -515,11 +544,12 @@ def render_plan(cfg: dict, node_to_pool: dict[str, str], image_replacements: int
     lines.append("")
     lines.append("Node → Pool:")
     for n in cfg["nodes"]:
+        workload = n.get("workload") or {}
         lines.append(
             f"  {n['name']}  ->  {node_to_pool[n['name']]}  "
             f"(arch={n.get('architecture', 'amd64')} cpu={n.get('cpu', NODE_CPU)} "
             f"memory={n.get('memory', NODE_MEMORY)} gpu={n['gpu']['count']} "
-            f"model={n['workload']['modelRelease']} util={n['workload']['utilization']})"
+            f"model={workload.get('modelRelease', 'idle')} util={workload.get('utilization', 'idle')})"
         )
     return "\n".join(lines) + "\n"
 
@@ -548,6 +578,9 @@ def main() -> int:
     if args.validate:
         print(f"OK: {args.config} validates")
         return 0
+
+    cfg = dict(cfg)
+    cfg["nodes"] = expand_nodes(cfg["nodes"])
 
     values = build_values(cfg)
     _, node_to_pool = build_node_pools(cfg["nodes"])

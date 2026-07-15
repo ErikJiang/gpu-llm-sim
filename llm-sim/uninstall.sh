@@ -21,11 +21,17 @@ fi
 # shellcheck disable=SC1090
 source "$COMMON_MODELS_SH"
 
-while IFS=$'\t' read -r release _model _port _profile; do
+MODEL_TABLE="$(read_model_table "$MODELS_FILE")"
+if [ -z "$MODEL_TABLE" ]; then
+  echo "ERROR: no models found in $MODELS_FILE" >&2
+  exit 1
+fi
+
+while IFS=$'\t' read -r release _rest; do
   echo "==> Uninstalling $release (ns=$NS)"
   if helm status "$release" -n "$NS" >/dev/null 2>&1; then
     helm uninstall "$release" -n "$NS"
   else
     echo "    (not installed, skipping)"
   fi
-done < <(read_model_table "$MODELS_FILE")
+done <<< "$MODEL_TABLE"

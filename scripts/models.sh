@@ -9,8 +9,8 @@ read_model_table() {
   fi
 
   grep -E '^[A-Z0-9_]+=' "$file" | while IFS='=' read -r _ value; do
-    IFS=':' read -r release model port profile max_model_len traffic_weight revision _rest <<<"$value"
-    if [ -z "${release:-}" ] || [ -z "${model:-}" ] || [ -z "${port:-}" ]; then
+    IFS=':' read -r release served_model tokenizer_model port profile max_model_len traffic_weight revision _rest <<<"$value"
+    if [ -n "${_rest:-}" ] || [ -z "${release:-}" ] || [ -z "${served_model:-}" ] || [ -z "${tokenizer_model:-}" ] || [ -z "${port:-}" ] || [ -z "${profile:-}" ]; then
       echo "ERROR: invalid model entry: $value" >&2
       return 1
     fi
@@ -21,7 +21,7 @@ read_model_table() {
       echo "ERROR: invalid numeric field in model entry: $value" >&2
       return 1
     fi
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-      "$release" "$model" "$port" "${profile:-}" "$max_model_len" "$traffic_weight" "$revision"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "$release" "$served_model" "$tokenizer_model" "$port" "${profile:-}" "$max_model_len" "$traffic_weight" "$revision"
   done
 }

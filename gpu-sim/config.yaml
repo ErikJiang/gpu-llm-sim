@@ -10,8 +10,9 @@ releaseName: fake-gpu-operator
 # 相同 gpu{product,count,memoryMiB} 的节点会被合并到同一 nodePool。
 # cpu/memory/architecture 模拟真实主机；workload 显式绑定模型和 GPU utilization。
 nodes:
-  # DeepSeek V4 Pro：8×H200，约 1.1TiB HBM，模拟 HGX H200 节点。
-  - name: kwok-h200-01
+  # DeepSeek-V4-Pro：6 个 HGX H200 节点，共 48 卡。
+  - name: kwok-h200
+    replicas: 6
     cpu: 224
     memory: 2Ti
     architecture: amd64
@@ -28,8 +29,9 @@ nodes:
       modelRelease: deepseek-v4-pro
       utilization: 68-92
 
-  # GLM 5.1 BF16：16×GH200，按 8 个 NVL2 风格 arm64 节点展开。
-  - name: kwok-gh200-01
+  # GLM-5.2：40 个 GH200 NVL2 风格 arm64 节点，共 80 卡。
+  - name: kwok-gh200
+    replicas: 40
     cpu: 144
     memory: 960Gi
     architecture: arm64
@@ -43,130 +45,12 @@ nodes:
       memoryMiB: 147456
       tflopsFP32: 60.0
     workload:
-      modelRelease: glm-51
-      utilization: 58-84
+      modelRelease: glm-52
+      utilization: 58-88
 
-  - name: kwok-gh200-02
-    cpu: 144
-    memory: 960Gi
-    architecture: arm64
-    taints:
-      - key: kwok.x-k8s.io/node
-        value: fake
-        effect: NoSchedule
-    gpu:
-      product: NVIDIA GH200 144GB HBM3e
-      count: 2
-      memoryMiB: 147456
-      tflopsFP32: 60.0
-    workload:
-      modelRelease: glm-51
-      utilization: 61-87
-
-  - name: kwok-gh200-03
-    cpu: 144
-    memory: 960Gi
-    architecture: arm64
-    taints:
-      - key: kwok.x-k8s.io/node
-        value: fake
-        effect: NoSchedule
-    gpu:
-      product: NVIDIA GH200 144GB HBM3e
-      count: 2
-      memoryMiB: 147456
-      tflopsFP32: 60.0
-    workload:
-      modelRelease: glm-51
-      utilization: 56-82
-
-  - name: kwok-gh200-04
-    cpu: 144
-    memory: 960Gi
-    architecture: arm64
-    taints:
-      - key: kwok.x-k8s.io/node
-        value: fake
-        effect: NoSchedule
-    gpu:
-      product: NVIDIA GH200 144GB HBM3e
-      count: 2
-      memoryMiB: 147456
-      tflopsFP32: 60.0
-    workload:
-      modelRelease: glm-51
-      utilization: 63-89
-
-  - name: kwok-gh200-05
-    cpu: 144
-    memory: 960Gi
-    architecture: arm64
-    taints:
-      - key: kwok.x-k8s.io/node
-        value: fake
-        effect: NoSchedule
-    gpu:
-      product: NVIDIA GH200 144GB HBM3e
-      count: 2
-      memoryMiB: 147456
-      tflopsFP32: 60.0
-    workload:
-      modelRelease: glm-51
-      utilization: 60-86
-
-  - name: kwok-gh200-06
-    cpu: 144
-    memory: 960Gi
-    architecture: arm64
-    taints:
-      - key: kwok.x-k8s.io/node
-        value: fake
-        effect: NoSchedule
-    gpu:
-      product: NVIDIA GH200 144GB HBM3e
-      count: 2
-      memoryMiB: 147456
-      tflopsFP32: 60.0
-    workload:
-      modelRelease: glm-51
-      utilization: 57-83
-
-  - name: kwok-gh200-07
-    cpu: 144
-    memory: 960Gi
-    architecture: arm64
-    taints:
-      - key: kwok.x-k8s.io/node
-        value: fake
-        effect: NoSchedule
-    gpu:
-      product: NVIDIA GH200 144GB HBM3e
-      count: 2
-      memoryMiB: 147456
-      tflopsFP32: 60.0
-    workload:
-      modelRelease: glm-51
-      utilization: 64-90
-
-  - name: kwok-gh200-08
-    cpu: 144
-    memory: 960Gi
-    architecture: arm64
-    taints:
-      - key: kwok.x-k8s.io/node
-        value: fake
-        effect: NoSchedule
-    gpu:
-      product: NVIDIA GH200 144GB HBM3e
-      count: 2
-      memoryMiB: 147456
-      tflopsFP32: 60.0
-    workload:
-      modelRelease: glm-51
-      utilization: 59-85
-
-  # 两个独立 H100 服务节点，避免把两个 4-GPU 模型伪装成同一实例。
-  - name: kwok-h100-01
+  # 三个 H100 服务池，共 44 卡。
+  - name: kwok-h100
+    replicas: 4
     cpu: 128
     memory: 1Ti
     architecture: amd64
@@ -180,10 +64,11 @@ nodes:
       memoryMiB: 81920
       tflopsFP32: 67.0
     workload:
-      modelRelease: minimax-m27
+      modelRelease: minimax-m3
       utilization: 66-91
 
-  - name: kwok-h100-02
+  - name: kwok-h100-kimi
+    replicas: 4
     cpu: 128
     memory: 1Ti
     architecture: amd64
@@ -197,10 +82,30 @@ nodes:
       memoryMiB: 81920
       tflopsFP32: 67.0
     workload:
-      modelRelease: qwen35-122b-a10b
+      modelRelease: kimi-k27-code
+      utilization: 64-90
+
+  - name: kwok-h100-qwen
+    replicas: 3
+    cpu: 128
+    memory: 1Ti
+    architecture: amd64
+    taints:
+      - key: kwok.x-k8s.io/node
+        value: fake
+        effect: NoSchedule
+    gpu:
+      product: NVIDIA H100 80GB HBM3
+      count: 4
+      memoryMiB: 81920
+      tflopsFP32: 67.0
+    workload:
+      modelRelease: qwen37-plus
       utilization: 70-94
 
-  - name: kwok-a100-pcie-01
+  # 旧卡保留为可见的 idle capacity，不伪装承载前沿模型。
+  - name: kwok-a100-pcie
+    replicas: 5
     cpu: 64
     memory: 512Gi
     architecture: amd64
@@ -213,11 +118,9 @@ nodes:
       count: 2
       memoryMiB: 81920
       tflopsFP32: 19.5
-    workload:
-      modelRelease: qwen3-32b
-      utilization: 55-82
 
-  - name: kwok-v100-sxm2-01
+  - name: kwok-v100-sxm2
+    replicas: 5
     cpu: 48
     memory: 256Gi
     architecture: amd64
@@ -230,9 +133,6 @@ nodes:
       count: 2
       memoryMiB: 32768
       tflopsFP32: 15.7
-    workload:
-      modelRelease: baichuan2-13b-chat
-      utilization: 48-76
 
 # —— 加速器（可选） ——
 # 全部字段都可省略，省略后走默认上游。

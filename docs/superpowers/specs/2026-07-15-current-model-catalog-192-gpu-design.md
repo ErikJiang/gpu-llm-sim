@@ -14,7 +14,7 @@ The model name exposed by the OpenAI-compatible simulator and attached to GPU wo
 |---|---|---|---:|---:|
 | `glm-52` | `GLM-5.2` | `ZhipuAI/GLM-5.2` | 1,000,000 | 22 |
 | `deepseek-v4-pro` | `DeepSeek-V4-Pro` | `deepseek-ai/DeepSeek-V4-Pro` | 1,000,000 | 28 |
-| `minimax-m3` | `MiniMax-M3` | `MiniMax/MiniMax-M3` | 1,000,000 | 16 |
+| `minimax-m3` | `MiniMax-M3` | `MiniMax/MiniMax-M2.7` | 1,000,000 | 16 |
 | `kimi-k27-code` | `Kimi-K2.7-Code` | `moonshotai/Kimi-K2.7-Code` | 262,144 | 14 |
 | `qwen37-plus` | `Qwen3.7-Plus` | `Qwen/Qwen3.6-27B` | 1,000,000 | 20 |
 

@@ -5,7 +5,7 @@
 项目保留两个清晰子模块：
 
 - `gpu-sim/`：安装 KWOK、fake-gpu-operator、fake GPU 节点，并用 shadow workload 驱动 `DCGM_*` GPU 指标。
-- `llm-sim/`：部署 `llm-d-inference-sim` 模型服务，并用 `bench.sh` 产生 `vllm:*` 指标。
+- `llm-sim/`：部署模型服务，并用 synthetic exporter 产生 `vllm:*` 指标。
 
 ## 推荐流程
 
@@ -22,25 +22,25 @@ make install-llm
 # 4. 每张 fake GPU 创建一个 shadow workload
 make apply-gpu-load
 
-# 5. 运行压测，产生请求速率、token 吞吐、TTFT、TPOT、KV cache 等指标
-make bench RPS=30 CONCURRENCY=32 DURATION=10m
+# 5. 运行 GPU 波动驱动；模型指标由 exporter 自动产生
+make bench DURATION=24h
 ```
 
 一键演示：
 
 ```bash
 make demo
-make bench RPS=30 CONCURRENCY=32 DURATION=10m
+make bench DURATION=24h
 ```
 
 ## 指标模型
 
-- LLM 服务 Pod 运行在真实节点上，保证 `/v1/chat/completions` 和 `/metrics` 可用。
+- LLM 服务 Pod 运行在真实节点上，保证 `/v1/completions` 和 `/metrics` 可用。
 - KWOK fake GPU 节点运行轻量 shadow Pod，不提供真实 HTTP 服务，只用于驱动 fake-gpu-operator 的 GPU util 指标。
-- 默认拓扑为 13 个节点、36 张 GPU：H200、GH200、H100、A100-PCIE-80GB、V100-SXM2-32GB。
+- 默认拓扑为 67 个节点、192 张 GPU：48×H200、80×GH200、44×H100、10×A100-PCIE-80GB、10×V100-SXM2-32GB；其中 A100/V100 为 idle reserve。
 - `gpu-sim/config.yaml` 显式定义 `modelRelease → GPU slots`、逐节点 CPU/内存/架构和 utilization，不再轮询乱配。
-- `bench.sh` 按 `models.env` 权重分配流量，并支持并发、burst、随机 prompt/output 和 stream 混合。
-- 6 个模型使用独立 context 与延迟 profile，让 TTFT、TPOT、token throughput 和 KV cache 指标拉开合理差异。
+- synthetic exporter 默认以约 63 req/s、约 4.45M prompt + generation tok/s 为 normal 中心，按目标模型比例生成分钟级业务阶段和相关漂移。
+- `GLM-5.2`、`DeepSeek-V4-Pro`、`MiniMax-M3`、`Kimi-K2.7-Code`、`Qwen3.7-Plus` 使用独立 context 与延迟 profile，让 TTFT、TPOT、token throughput 和 KV cache 指标拉开合理差异。
 
 ## 常用命令
 
@@ -51,7 +51,7 @@ make install-llm LLM_NAMESPACE=llm-sim
 make apply-gpu-load                    # 使用逐节点 utilization
 make apply-gpu-load WORKLOAD_UTIL=45-90 # 显式全局覆盖
 make set-gpu-util WORKLOAD_UTIL=80-95
-make bench RPS=50 CONCURRENCY=64 DURATION=15m GPU_SHADOW_SYNC=true
+make bench DURATION=15m GPU_SHADOW_SYNC=true
 make uninstall
 ```
 
@@ -60,4 +60,4 @@ make uninstall
 - 不把真实 LLM 服务 Pod 调度到 KWOK 节点。KWOK 没有真实 kubelet/container runtime，服务不会真正监听 HTTP。
 - fake-gpu-operator 在当前 KWOK 路径下主要可靠模拟 `DCGM_FI_DEV_GPU_UTIL`。显存 used/free 仍主要来自 nodePool `gpuMemory`。
 - 模型与 GPU 的绑定是 dashboard/metrics 标签关系，不代表真实推理 Pod 在 KWOK 节点完成调度。
-- KV cache、TTFT、TPOT、token throughput 以 `llm-d-inference-sim` 的 `vllm:*` 指标为准。
+- Dashboard 使用 synthetic exporter 的 `vllm:*` 指标；这些指标用于演示，不代表真实模型性能。

@@ -21,7 +21,7 @@ install: ## 一键安装所有 LLM simulator release
 	NAMESPACE=$(NAMESPACE) ./install.sh
 
 .PHONY: bench
-bench: ## 运行压测产生 vllm metrics
+bench: ## 运行 GPU 波动驱动；模型 metrics 由 exporter 自动生成
 	NAMESPACE=$(NAMESPACE) ./bench.sh
 
 .PHONY: uninstall

@@ -5,6 +5,8 @@ metadata:
   labels:
     {{- include "multi-model.labels" . | nindent 4 }}
 data:
+  synthetic_metrics.py: |
+{{ .Files.Get "files/synthetic_metrics.py" | indent 4 }}
   config.yaml: |
     port: {{ .Values.config.port }}
     model: "{{ .Values.config.model }}"

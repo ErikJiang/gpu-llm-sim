@@ -60,7 +60,7 @@ FGO_IMAGE_DEFAULTS: dict[str, str] = {
     "ubuntu.image.repository": "ubuntu",
 }
 
-# 每个 KWOK 节点的资源容量（合理默认值；用户不可配置 v1）
+# 每个 KWOK 节点的资源容量默认值；可在 nodes[] 逐节点覆盖。
 NODE_CPU = "32"
 NODE_MEMORY = "128Gi"
 NODE_PODS = "110"
@@ -75,7 +75,7 @@ def die(msg: str, code: int = 1) -> None:
 
 
 def slug(s: str) -> str:
-    """把 'NVIDIA A100-SXM4-40GB' 转成 'a100-sxm4-40gb'（小写、非字母数字 → -）。"""
+    """把 'NVIDIA H200 141GB HBM3e' 转成 'h200-141gb-hbm3e'。"""
     s = s.lower()
     s = re.sub(r"^nvidia[\s_-]*", "", s)
     s = re.sub(r"[^a-z0-9]+", "-", s)
@@ -138,6 +138,14 @@ def validate_config(cfg: dict) -> list[str]:
         else:
             seen_names.add(name)
 
+        architecture = n.get("architecture", "amd64")
+        if architecture not in ("amd64", "arm64"):
+            errs.append(f"{prefix}.architecture must be amd64 or arm64")
+        for resource in ("cpu", "memory", "pods"):
+            value = n.get(resource)
+            if value is not None and (isinstance(value, bool) or not isinstance(value, (str, int)) or not str(value).strip()):
+                errs.append(f"{prefix}.{resource} must be a non-empty Kubernetes quantity")
+
         gpu = n.get("gpu")
         if not isinstance(gpu, dict):
             errs.append(f"{prefix}.gpu must be a mapping")
@@ -147,10 +155,22 @@ def validate_config(cfg: dict) -> list[str]:
                 errs.append(f"{prefix}.gpu.{k} required")
         if isinstance(gpu.get("product"), str) and not gpu["product"].strip():
             errs.append(f"{prefix}.gpu.product must be non-empty")
-        if isinstance(gpu.get("count"), int) and gpu["count"] < 1:
+        if not isinstance(gpu.get("count"), int) or isinstance(gpu.get("count"), bool) or gpu["count"] < 1:
             errs.append(f"{prefix}.gpu.count must be >= 1")
-        if isinstance(gpu.get("memoryMiB"), int) and gpu["memoryMiB"] < 1:
+        if not isinstance(gpu.get("memoryMiB"), int) or isinstance(gpu.get("memoryMiB"), bool) or gpu["memoryMiB"] < 1:
             errs.append(f"{prefix}.gpu.memoryMiB must be >= 1")
+
+        workload = n.get("workload")
+        if not isinstance(workload, dict):
+            errs.append(f"{prefix}.workload must be a mapping")
+        else:
+            release = workload.get("modelRelease")
+            if not isinstance(release, str) or not re.match(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", release):
+                errs.append(f"{prefix}.workload.modelRelease '{release}' invalid (must be RFC1123)")
+            utilization = workload.get("utilization")
+            match = re.fullmatch(r"(\d{1,3})-(\d{1,3})", str(utilization or ""))
+            if not match or int(match.group(1)) > int(match.group(2)) or int(match.group(2)) > 100:
+                errs.append(f"{prefix}.workload.utilization must be an ascending 0-100 range")
 
         taints = n.get("taints")
         if taints is not None:
@@ -325,7 +345,20 @@ def build_kwok_nodes(cfg: dict, node_to_pool: dict[str, str]) -> list[dict]:
     manifests: list[dict] = []
     for n in cfg["nodes"]:
         name = n["name"]
-        gpu_count = n["gpu"]["count"]
+        gpu = n["gpu"]
+        gpu_count = gpu["count"]
+        architecture = n.get("architecture", "amd64")
+        cpu = str(n.get("cpu", NODE_CPU))
+        memory = str(n.get("memory", NODE_MEMORY))
+        pods = str(n.get("pods", NODE_PODS))
+        workload = n["workload"]
+        annotations = {
+            "kwok.x-k8s.io/node": "fake",
+            "gpu-llm-sim/gpu-product": gpu["product"],
+            "gpu-llm-sim/gpu-memory-mib": str(gpu["memoryMiB"]),
+        }
+        if "tflopsFP32" in gpu:
+            annotations["gpu-llm-sim/tflops-fp32"] = str(gpu["tflopsFP32"])
         # 节点级别的 GPU resource 在 status.allocatable 中体现，
         # fgo 的 kwok device plugin 会以 status.allocatable.nvidia.com/gpu = N 作为输入
         node = {
@@ -336,28 +369,28 @@ def build_kwok_nodes(cfg: dict, node_to_pool: dict[str, str]) -> list[dict]:
                 "labels": {
                     "type": "kwok",
                     "kubernetes.io/os": "linux",
-                    "kubernetes.io/arch": "amd64",
+                    "kubernetes.io/arch": architecture,
                     "kubernetes.io/hostname": name,
+                    "node.kubernetes.io/instance-type": slug(gpu["product"]),
                     "run.ai/simulated-gpu-node-pool": node_to_pool[name],
+                    "gpu-llm-sim/model-release": workload["modelRelease"],
                 },
-                "annotations": {
-                    "kwok.x-k8s.io/node": "fake",
-                },
+                "annotations": annotations,
             },
             "spec": {
                 "taints": n.get("taints", []),
             },
             "status": {
                 "capacity": {
-                    "cpu": NODE_CPU,
-                    "memory": NODE_MEMORY,
-                    "pods": NODE_PODS,
+                    "cpu": cpu,
+                    "memory": memory,
+                    "pods": pods,
                     NODE_NVIDIA_GPU_KEY: str(gpu_count),
                 },
                 "allocatable": {
-                    "cpu": NODE_CPU,
-                    "memory": NODE_MEMORY,
-                    "pods": NODE_PODS,
+                    "cpu": cpu,
+                    "memory": memory,
+                    "pods": pods,
                     NODE_NVIDIA_GPU_KEY: str(gpu_count),
                 },
                 "nodeInfo": {
@@ -370,7 +403,7 @@ def build_kwok_nodes(cfg: dict, node_to_pool: dict[str, str]) -> list[dict]:
                     "kubeletVersion": "fake",
                     "kubeProxyVersion": "fake",
                     "operatingSystem": "linux",
-                    "architecture": "amd64",
+                    "architecture": architecture,
                 },
             },
         }
@@ -389,9 +422,15 @@ def build_node_inventory(cfg: dict, node_to_pool: dict[str, str]) -> dict:
         nodes.append({
             "name": n["name"],
             "pool": node_to_pool[n["name"]],
+            "cpu": str(n.get("cpu", NODE_CPU)),
+            "memory": str(n.get("memory", NODE_MEMORY)),
+            "architecture": n.get("architecture", "amd64"),
             "gpuProduct": gpu["product"],
             "gpuCount": gpu_count,
             "gpuMemoryMiB": gpu["memoryMiB"],
+            "tflopsFP32": gpu.get("tflopsFP32"),
+            "modelRelease": n["workload"]["modelRelease"],
+            "utilization": n["workload"]["utilization"],
         })
     return {
         "namespace": cfg.get("namespace") or DEFAULT_NAMESPACE,
@@ -476,7 +515,12 @@ def render_plan(cfg: dict, node_to_pool: dict[str, str], image_replacements: int
     lines.append("")
     lines.append("Node → Pool:")
     for n in cfg["nodes"]:
-        lines.append(f"  {n['name']}  ->  {node_to_pool[n['name']]}  (gpu count={n['gpu']['count']})")
+        lines.append(
+            f"  {n['name']}  ->  {node_to_pool[n['name']]}  "
+            f"(arch={n.get('architecture', 'amd64')} cpu={n.get('cpu', NODE_CPU)} "
+            f"memory={n.get('memory', NODE_MEMORY)} gpu={n['gpu']['count']} "
+            f"model={n['workload']['modelRelease']} util={n['workload']['utilization']})"
+        )
     return "\n".join(lines) + "\n"
 
 

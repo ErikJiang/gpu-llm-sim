@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# 卸载 5 个模型 release（幂等：已卸载的会跳过）。
+# 卸载 models.env 中声明的模型 release（幂等：已卸载的会跳过）。
 # 用法：
 #   ./uninstall.sh
 #   NAMESPACE=my-ns ./uninstall.sh

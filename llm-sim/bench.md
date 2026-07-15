@@ -8,7 +8,7 @@
 
 ```bash
 export KUBECONFIG=/path/to/kubeconfig
-kubectl -n llm-sim get pod  # 确认 5 个 multi-model Pod 存在
+kubectl -n llm-sim get pod  # 确认 6 个 multi-model Pod 存在
 ```
 
 ## 方式一：Port-forward（推荐）
@@ -32,11 +32,13 @@ RPS=30 CONCURRENCY=32 DURATION=10m nohup ./bench.sh > /tmp/bench.log 2>&1 &
 kubectl -n llm-sim get pod -l app.kubernetes.io/name=multi-model -o wide
 
 # 2. 在节点上执行
-export TARGET_IPS="10.244.1.204:8001:qwen/Qwen2.5-0.5B-Instruct,10.244.1.205:8002:deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
+export TARGET_IPS="10.244.1.204:8001:deepseek-ai/DeepSeek-V4-Pro:30,10.244.1.205:8004:Qwen/Qwen3-32B:10"
 ./bench.sh
 ```
 
-> PodIP 变化后需更新 `TARGET_IPS`。
+> PodIP 变化后需更新 `TARGET_IPS`。第四段 weight 可省略；省略时优先读取 `models.env`，未注册模型使用 `1`。
+
+自动发现模式按 `models.env` 的 `TRAFFIC_WEIGHT` 加权选择 target，默认权重总和为 100。该分布用于制造更接近线上路由的不同模型 QPS，不是容量配额。
 
 ## 环境变量
 
@@ -57,7 +59,7 @@ export TARGET_IPS="10.244.1.204:8001:qwen/Qwen2.5-0.5B-Instruct,10.244.1.205:800
 | `BURST_MULTIPLIER` | `2.0` | burst 期间 RPS 倍数 |
 | `TIMEOUT` | `60` | 单请求超时（秒） |
 | `PF_LOCAL_BASE` | `28000` | port-forward 本地起始端口 |
-| `TARGET_IPS` | — | 设置后切换为 Node 直连模式，格式 `host:port:model` |
+| `TARGET_IPS` | — | 设置后切换为 Node 直连模式，格式 `host:port:model[:weight]` |
 | `SERVICE_DNS` | `false` | 设置为 `true` 后使用 Service DNS，适合集群内运行 |
 | `GPU_SHADOW_SYNC` | `false` | 设置为 `true` 后按 burst 状态 patch shadow pod util annotation |
 | `GPU_WORKLOAD_NAMESPACE` | `demo` | shadow pod namespace |

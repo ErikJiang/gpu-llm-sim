@@ -5,7 +5,7 @@
 `gpu-sim` 是 [fake-gpu-operator](https://github.com/run-ai/fake-gpu-operator) 的薄包装层：
 
 - 不修改 fake-gpu-operator 任何代码
-- 配置文件声明多节点（每节点指定 GPU 型号 / 数量 / 显存 / 算力）
+- 配置文件声明多节点（每节点指定 CPU / 内存 / 架构 / GPU / 模型映射 / utilization）
 - 一条命令完成安装：拉 fake-gpu-operator OCI chart → 装 KWOK → 装 fgo → 注入 KWOK 节点
 - 加速器/镜像替换入口：内置 daocloud 镜像作为国内网络默认
 - util 通过 shadow/demo pod 的 fgo annotation 驱动（temperature / power / 时变序列 v1 不支持）
@@ -70,19 +70,38 @@ namespace: gpu-sim                # K8s namespace
 releaseName: fake-gpu-operator    # helm release name
 
 nodes:                             # 节点列表
-  - name: kwok-gpu-a               # 必填，RFC1123
+  - name: kwok-h200-01             # 必填，RFC1123
+    cpu: 224
+    memory: 2Ti
+    architecture: amd64            # GH200 使用 arm64
     taints:                        # 可选
       - key: kwok.x-k8s.io/node
         value: fake
         effect: NoSchedule
     gpu:
-      product: NVIDIA A100-SXM4-40GB
-      count: 2
-      memoryMiB: 40960             # 单卡显存
-      tflopsFP32: 19.5             # 仅 metadata
+      product: NVIDIA H200 141GB HBM3e
+      count: 8
+      memoryMiB: 144384            # 单卡显存
+      tflopsFP32: 67.0             # Node annotation/inventory metadata
+    workload:
+      modelRelease: deepseek-v4-pro
+      utilization: 68-92
 ```
 
 `{product, count, memoryMiB}` 三元组相同的节点会被合并为同一 `nodePools.<name>`；不同则生成多个 pool。
+
+默认拓扑：
+
+| 模型 release | 节点形态 | GPU 总数 | utilization |
+| --- | --- | ---: | --- |
+| `deepseek-v4-pro` | 1× HGX H200（8×141GB） | 8 | 68-92 |
+| `glm-51` | 8× GH200 NVL2 风格 arm64 节点（每节点 2×144GB） | 16 | 逐节点 56-90 |
+| `minimax-m27` | 1× 4-GPU H100 节点 | 4 | 66-91 |
+| `qwen35-122b-a10b` | 1× 4-GPU H100 节点 | 4 | 70-94 |
+| `qwen3-32b` | 1× 2-GPU A100 PCIe 节点 | 2 | 55-82 |
+| `baichuan2-13b-chat` | 1× 2-GPU V100 SXM2 节点 | 2 | 48-76 |
+
+合计 13 个节点、36 张 GPU。`modelRelease` 必须存在于 `llm-sim/models.env`；`workload.sh` 按该映射创建每卡一个 shadow Pod，不再 round-robin。
 
 完整配置示例见 [`config.example.yaml`](config.example.yaml)。
 
@@ -139,7 +158,7 @@ gpu-sim **不**自研 Prometheus exporter。所有 metrics 来自 fake-gpu-opera
 
 > **KWOK 模式限制**：当前 fgo 的 KWOK status-updater 只消费 `run.ai/simulated-gpu-utilization` annotation，`DCGM_FI_DEV_FB_USED/FREE` 固定由 pool 的 `gpuMemory` 决定。因此 `run.ai/simulated-gpu-memory` 在 KWOK 节点上**不会**改变显存占用曲线。
 
-### 控制 util/memory 的方式
+### 控制 utilization 的方式
 
 fake-gpu-operator 的 status-updater 通过 pod annotation 决定 util/memory 区间。推荐使用 `workload.sh`，它会为每张 fake GPU 创建一个 shadow pod，避免多卡节点只有一张卡有 util 波动。`demo.sh` 仍保留为 GPU-only fallback。
 
@@ -154,6 +173,7 @@ metadata:
 
 ```bash
 # 推荐：每张 fake GPU 一个 shadow pod
+make workload                         # 使用每个节点 workload.utilization
 WORKLOAD_UTIL="80-95" make workload
 WORKLOAD_UTIL="60-80" make workload-util
 
@@ -180,8 +200,8 @@ make check
 make gen
 
 # 触发 GPU metrics
-make workload                         # 推荐：每张 fake GPU 一个 shadow pod
-WORKLOAD_UTIL="60-80" make workload   # 自定义 util
+make workload                         # 使用 config.yaml 逐节点 util
+WORKLOAD_UTIL="60-80" make workload   # 全局覆盖 util
 make workload-delete                  # 清理 shadow pod
 make demo                             # fallback：每节点一个 demo pod
 DEMO_UTIL="60-80" make demo           # fallback 自定义 util
@@ -198,8 +218,9 @@ make uninstall-all              # 完全卸载
 
 - **不导出** `DCGM_FI_DEV_GPU_TEMP` / `POWER_USAGE` / `SM_CLOCK` 等 series
 - **不支持**时变多段序列（util/memory 是单段 min-max 内随机）
-- **不做** GPU 型号 profile 校验（直接信任配置文件）
-- **不做** pod 调度联动（fgo 内置机制，pod 起来后才出 metrics）
+- `tflopsFP32` 只写入 Node annotation/inventory，fake-gpu-operator 不用它计算指标
+- 模型与 GPU 的绑定是 dashboard/metrics 标签关系，真实 LLM Pod 不会调度到 KWOK 节点
+- **不做**真实推理 pod 调度联动（shadow pod 起来后才有 metrics）
 - **不做** controller / CRD（kubectl apply 直 apply）
 
 需要以上任一功能时，参考上游 fake-gpu-operator 是否已支持，或作为 gpu-sim v2 候选（自研 metricgen exporter）。

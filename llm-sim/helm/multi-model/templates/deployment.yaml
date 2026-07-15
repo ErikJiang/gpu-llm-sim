@@ -43,14 +43,13 @@ spec:
         restartPolicy: Always
         command: ["/bin/sh", "-c"]
         args:
-          # 只下载 tokenizer + 模型 config 元数据（约 5-50MB），不要权重。
+          # 只下载 tokenizer/processor/config/remote-code（单模型通常 2-30MB），不要权重。
           # `vllm launch render` 用 ModelConfig 校验目录，需要 config.json；
-          # 同时需要 tokenizer 相关文件才能 tokenize。
-          # allow_file_pattern 过滤掉 .safetensors/.bin/.gguf/.pt/.pth 权重，
-          # 避免动辄 1-12GB 的下载和对应带宽/OOM 风险。
+          # Qwen3.5 是多模态模型，还需要 preprocessor config 才能初始化 processor。
+          # allow + ignore 双重过滤权重，避免数十 GB 到 TB 级下载和 OOM 风险。
           - >-
             pip install --quiet --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ 'modelscope>=1.19.7' 'huggingface_hub>=1.5.0,<2.0' &&
-            MODEL_DIR=$(python -c "from modelscope import snapshot_download; print(snapshot_download('{{ .Values.config.model }}', allow_file_pattern=['config.json','generation_config.json','tokenizer.json','tokenizer_config.json','tokenizer.model','special_tokens_map.json','vocab.json','vocab.txt','merges.txt','added_tokens.json','*.tiktoken','*.py','*.model','chat_template*','*.md']))" 2>/dev/null || python -c "from modelscope import snapshot_download; print(snapshot_download('{{ .Values.config.model }}', allow_file_pattern=['*.json','*.py','*.tiktoken','*.model','*.txt','*.md']))") &&
+            MODEL_DIR=$(python -c "import os; from modelscope import snapshot_download; print(snapshot_download(os.environ['MODEL_ID'], revision=os.environ['MODEL_REVISION'], allow_file_pattern=['config.json','generation_config.json','tokenizer*','special_tokens_map.json','vocab*','merges.txt','added_tokens.json','preprocessor_config.json','*processor_config.json','chat_template*','*.tiktoken','*.py','*.model','*.txt','*.md'], ignore_file_pattern=['*.safetensors','*.bin','*.gguf','*.pt','*.pth']))" 2>/dev/null || python -c "import os; from modelscope import snapshot_download; print(snapshot_download(os.environ['MODEL_ID'], revision=os.environ['MODEL_REVISION'], allow_file_pattern=['*.json','*.py','*.tiktoken','*.model','*.txt','*.md'], ignore_file_pattern=['*.safetensors','*.bin','*.gguf','*.pt','*.pth']))") &&
             echo "tokenizer ready at $MODEL_DIR" &&
             exec vllm launch render "$MODEL_DIR" --port={{ .Values.vllmRender.port }} --trust-remote-code
         env:
@@ -60,20 +59,23 @@ spec:
           # ModelScope 缓存路径（容器内）
           - name: MODELSCOPE_CACHE
             value: {{ .Values.vllmRender.modelScopeCache | default "/root/.cache/modelscope" | quote }}
+          - name: MODEL_ID
+            value: {{ .Values.config.model | quote }}
+          - name: MODEL_REVISION
+            value: {{ .Values.vllmRender.modelRevision | default "master" | quote }}
           # 兼容旧字段：HF_TOKEN 在 ModelScope 上不强制需要，但保留以便少数 gated 仓库
           - name: HF_TOKEN
             value: {{ .Values.env.HF_TOKEN | default "" | quote }}
         ports:
         - name: http
           containerPort: {{ .Values.vllmRender.port }}
-        # 显式 resources：vllm launch render 只做 tokenize，~300Mi 内存足够。
-        # 不要给太大，否则小集群 (3 schedulable nodes) 调度会失败。
+        # vLLM render 不加载权重，但大词表与 remote-code 初始化需要保留内存余量。
         resources:
           requests:
-            memory: "512Mi"
+            memory: "1Gi"
             cpu: "200m"
           limits:
-            memory: "2Gi"
+            memory: "4Gi"
         livenessProbe:
           httpGet:
             path: /health

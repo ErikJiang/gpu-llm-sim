@@ -14,7 +14,7 @@ data:
     max-cpu-loras: {{ .Values.config.maxCpuLoras }}
     max-num-seqs: {{ .Values.config.maxNumSeqs }}
     max-waiting-queue-length: {{ .Values.config.maxWaitingQueueLength }}
-    max-model-len: {{ .Values.config.maxModelLen }}
+    max-model-len: {{ int .Values.config.maxModelLen }}
     {{- if .Values.config.loraModules }}
     lora-modules:
     {{- toYaml .Values.config.loraModules | nindent 4 }}

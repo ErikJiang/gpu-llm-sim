@@ -17,9 +17,10 @@
 | `vllmRender.image` | `m.daocloud.io/docker.io/vllm/vllm-openai-cpu:v0.21.0` | 只做 tokenization |
 | `vllmRender.imagePullPolicy` | `IfNotPresent` | 拉取策略 |
 | `vllmRender.port` | `8082` | main 容器通过 `render-url` 调用 |
-| `vllmRender.modelScopeCache` | `/root/.cache/modelscope` | 容器内缓存路径；可挂 hostPath/PVC 共享 |
+| `vllmRender.modelScopeCache` | `/root/.cache/modelscope` | 容器内缓存路径；当前 chart 不挂持久卷，Pod 重建会重新下载 |
+| `vllmRender.modelRevision` | `master` | 传给 ModelScope `snapshot_download`；可改为仓库 tag/commit |
 
-> `VLLM_USE_MODELSCOPE=true` 在 initContainer 内固定设置，vllm 从 ModelScope Hub 拉取 tokenizer。
+> `VLLM_USE_MODELSCOPE=true` 在 sidecar 内固定设置。下载使用 allowlist，并显式排除 `*.safetensors`、`*.bin`、`*.gguf`、`*.pt`、`*.pth` 权重。
 
 ## 指标注解（podAnnotations / service.annotations）
 
@@ -41,13 +42,13 @@ insight.opentelemetry.io/metric-scrape: "true"
 | 字段 | 默认 | 说明 |
 | --- | --- | --- |
 | `config.port` | `8001` | 与 `service.port` 一致 |
-| `config.model` | `qwen/Qwen2.5-0.5B-Instruct` | ModelScope ID；install.sh 按 release 改写 |
+| `config.model` | `deepseek-ai/DeepSeek-V4-Pro` | ModelScope ID；install.sh 按 release 改写 |
 | `config.servedModelName` | `[]` | OpenAI `/v1/models` 暴露的模型名列表 |
 | `config.maxLoras` | `2` | 同时加载的 LoRA 上限 |
 | `config.maxCpuLoras` | `5` | CPU 端 LoRA 缓存上限 |
 | `config.maxNumSeqs` | `1000` | 并发请求上限 |
 | `config.maxWaitingQueueLength` | `1000` | 等待队列上限 |
-| `config.maxModelLen` | `32768` | 上下文窗口 |
+| `config.maxModelLen` | `1000000` | 上下文窗口；install.sh 按 models.env 改写 |
 | `config.loraModules` | `[]` | LoRA 列表 |
 | `config.mode` | `random` | `echo` / `random` |
 | `config.latencyCalculator` | `per-token` | prefill 计算方式，推荐 `per-token` |

@@ -4,7 +4,7 @@
 # Usage:
 #   NAMESPACE=llm-sim ./bench.sh
 #   RPS=30 CONCURRENCY=32 DURATION=10m ./bench.sh
-#   TARGET_IPS="10.0.0.10:8001:qwen/Qwen2.5-0.5B-Instruct" ./bench.sh
+#   TARGET_IPS="10.0.0.10:8001:Qwen/Qwen3-32B:10" ./bench.sh
 
 set -euo pipefail
 
@@ -63,7 +63,7 @@ if [ "$MODE" = "port-forward" ]; then
 
   echo "[bench] setting up port-forwards:"
   i=0
-  while IFS=$'\t' read -r release model port _profile; do
+  while IFS=$'\t' read -r release model port _profile _max_model_len traffic_weight _revision; do
     pods="$("$KUBECTL" -n "$NS" get pod -l "app.kubernetes.io/instance=$release,app.kubernetes.io/name=multi-model" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)"
     if [ -z "$pods" ]; then
       echo "  ! no pod for release=$release"
@@ -74,8 +74,8 @@ if [ "$MODE" = "port-forward" ]; then
       local_port=$((PF_LOCAL_BASE + i))
       "$KUBECTL" -n "$NS" port-forward "$pod" "${local_port}:${port}" >/dev/null 2>&1 &
       PF_PIDS+=($!)
-      printf '127.0.0.1:%s:%s\n' "$local_port" "$model" >> "$TARGET_FILE"
-      echo "  http://127.0.0.1:$local_port pod=$pod model=$model"
+      printf '127.0.0.1\t%s\t%s\t%s\n' "$local_port" "$model" "$traffic_weight" >> "$TARGET_FILE"
+      echo "  http://127.0.0.1:$local_port pod=$pod model=$model weight=$traffic_weight"
       i=$((i + 1))
     done <<< "$pods"
   done < <(read_model_table "$MODELS_FILE")
@@ -83,13 +83,17 @@ if [ "$MODE" = "port-forward" ]; then
 elif [ "$MODE" = "direct-ip" ]; then
   IFS=',' read -ra parts <<<"$TARGET_IPS"
   for part in "${parts[@]}"; do
-    IFS=':' read -r host port model <<<"$part"
+    IFS=':' read -r host port model traffic_weight <<<"$part"
     model="${model:-$DEFAULT_MODEL}"
-    printf '%s:%s:%s\n' "$host" "$port" "$model" >> "$TARGET_FILE"
+    if [ -z "${traffic_weight:-}" ]; then
+      traffic_weight="$(read_model_table "$MODELS_FILE" | awk -v model="$model" '$2 == model {print $6; exit}')"
+    fi
+    printf '%s\t%s\t%s\t%s\n' "$host" "$port" "$model" "${traffic_weight:-1}" >> "$TARGET_FILE"
   done
 else
-  while IFS=$'\t' read -r release model port _profile; do
-    printf '%s-multi-model.%s.svc.cluster.local:%s:%s\n' "$release" "$NS" "$port" "$model" >> "$TARGET_FILE"
+  while IFS=$'\t' read -r release model port _profile _max_model_len traffic_weight _revision; do
+    printf '%s-multi-model.%s.svc.cluster.local\t%s\t%s\t%s\n' \
+      "$release" "$NS" "$port" "$model" "$traffic_weight" >> "$TARGET_FILE"
   done < <(read_model_table "$MODELS_FILE")
 fi
 
@@ -132,10 +136,15 @@ def env_float(name: str, default: float) -> float:
 
 
 targets = []
+target_weights = []
 with open(os.environ["TARGET_FILE"], encoding="utf-8") as f:
     for line in f:
-        host, port, model = line.strip().split(":", 2)
+        host, port, model, raw_weight = line.rstrip("\n").split("\t")
+        weight = int(raw_weight)
+        if weight <= 0:
+            raise ValueError(f"target weight must be positive: {line.strip()}")
         targets.append((host, int(port), model))
+        target_weights.append(weight)
 
 rps = env_float("RPS", 20.0)
 concurrency = env_int("CONCURRENCY", 16)
@@ -254,7 +263,7 @@ with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as pool:
         effective_rps = max(0.1, rps * multiplier)
         if len(inflight) < concurrency and now >= next_submit:
             req_count += 1
-            target = targets[req_count % len(targets)]
+            target = random.choices(targets, weights=target_weights, k=1)[0]
             inflight.add(pool.submit(call_one, target, req_count))
             next_submit = now + (1.0 / effective_rps)
 

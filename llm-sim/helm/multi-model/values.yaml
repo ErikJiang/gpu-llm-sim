@@ -50,18 +50,20 @@ vllmRender:
   image: m.daocloud.io/docker.io/vllm/vllm-openai-cpu:v0.21.0
   imagePullPolicy: IfNotPresent
   port: 8082
-  # 容器内 ModelScope 缓存路径；可改 hostPath/PVC 共享
+  # 容器内 ModelScope 缓存路径；当前 chart 不挂持久卷，Pod 重建会重新下载
   modelScopeCache: /root/.cache/modelscope
+  # 可设置仓库 tag/commit；master 代表跟随 ModelScope 默认分支。
+  modelRevision: master
 
 config:
   port: 8001
-  model: "qwen/Qwen2.5-0.5B-Instruct"
+  model: "deepseek-ai/DeepSeek-V4-Pro"
   servedModelName:
-  - "qwen/Qwen2.5-0.5B-Instruct"
+  - "deepseek-ai/DeepSeek-V4-Pro"
   maxLoras: 2
   maxCpuLoras: 5
   maxNumSeqs: 1000
-  maxModelLen: 32768
+  maxModelLen: 1000000
   maxWaitingQueueLength: 1000
   loraModules: []
   mode: "random"

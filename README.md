@@ -37,8 +37,10 @@ make bench RPS=30 CONCURRENCY=32 DURATION=10m
 
 - LLM 服务 Pod 运行在真实节点上，保证 `/v1/chat/completions` 和 `/metrics` 可用。
 - KWOK fake GPU 节点运行轻量 shadow Pod，不提供真实 HTTP 服务，只用于驱动 fake-gpu-operator 的 GPU util 指标。
-- `bench.sh` 支持并发、RPS、随机 prompt 长度、随机 `max_tokens`、stream/non-stream 混合和 burst 流量。
-- `llm-sim/models.env` 支持 `small`、`balanced`、`large` profile，让不同模型的 TTFT、TPOT、token throughput 和 KV cache 指标拉开差异。
+- 默认拓扑为 13 个节点、36 张 GPU：H200、GH200、H100、A100-PCIE-80GB、V100-SXM2-32GB。
+- `gpu-sim/config.yaml` 显式定义 `modelRelease → GPU slots`、逐节点 CPU/内存/架构和 utilization，不再轮询乱配。
+- `bench.sh` 按 `models.env` 权重分配流量，并支持并发、burst、随机 prompt/output 和 stream 混合。
+- 6 个模型使用独立 context 与延迟 profile，让 TTFT、TPOT、token throughput 和 KV cache 指标拉开合理差异。
 
 ## 常用命令
 
@@ -46,7 +48,8 @@ make bench RPS=30 CONCURRENCY=32 DURATION=10m
 make check
 make install-gpu
 make install-llm LLM_NAMESPACE=llm-sim
-make apply-gpu-load WORKLOAD_UTIL=45-90
+make apply-gpu-load                    # 使用逐节点 utilization
+make apply-gpu-load WORKLOAD_UTIL=45-90 # 显式全局覆盖
 make set-gpu-util WORKLOAD_UTIL=80-95
 make bench RPS=50 CONCURRENCY=64 DURATION=15m GPU_SHADOW_SYNC=true
 make uninstall
@@ -56,4 +59,5 @@ make uninstall
 
 - 不把真实 LLM 服务 Pod 调度到 KWOK 节点。KWOK 没有真实 kubelet/container runtime，服务不会真正监听 HTTP。
 - fake-gpu-operator 在当前 KWOK 路径下主要可靠模拟 `DCGM_FI_DEV_GPU_UTIL`。显存 used/free 仍主要来自 nodePool `gpuMemory`。
+- 模型与 GPU 的绑定是 dashboard/metrics 标签关系，不代表真实推理 Pod 在 KWOK 节点完成调度。
 - KV cache、TTFT、TPOT、token throughput 以 `llm-d-inference-sim` 的 `vllm:*` 指标为准。

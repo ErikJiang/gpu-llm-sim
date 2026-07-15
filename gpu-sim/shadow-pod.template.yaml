@@ -14,6 +14,7 @@ metadata:
   annotations:
     run.ai/simulated-gpu-utilization: "{{WORKLOAD_UTIL}}"
     run.ai/simulated-gpu-memory: "{{WORKLOAD_MEM_USED}}"
+    gpu-llm-sim/model: "{{MODEL_NAME}}"
 spec:
   restartPolicy: Never
   nodeName: {{NODE_NAME}}

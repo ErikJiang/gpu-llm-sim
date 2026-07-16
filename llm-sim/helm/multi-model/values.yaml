@@ -29,17 +29,17 @@ securityContext: {}
 service:
   type: ClusterIP
   port: 8001
-  # Service-level annotations mirror the pod ones so that service-based discovery
-  # in OpenTelemetry/Insight also works.
-  annotations:
-    insight.opentelemetry.io/metric-path: /metrics
-    insight.opentelemetry.io/metric-port: "9090"
-    insight.opentelemetry.io/metric-scrape: "true"
+  annotations: {}
 
 syntheticMetrics:
   port: 9090
   baseRps: 63
   weight: 20
+
+phaseDriver:
+  enabled: false
+  workloadNamespace: demo
+  inventory: '{"nodes":[]}'
 
 resources: {}
 nodeSelector: {}

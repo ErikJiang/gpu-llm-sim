@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Correlated traffic phases shared by the LLM and fake-GPU simulators."""
+"""Correlated traffic phases shared by benchmark and metric simulators."""
 
 from __future__ import annotations
 
@@ -162,5 +162,7 @@ def gpu_utilization_range(base_range: str, phase: str, node_name: str) -> str:
         "busy": (4, 8),
         "spike": (10, 6),
     }[phase]
-    center = max(half_width, min(100 - half_width, center + stable_offset + phase_offset))
+    half_width = min(half_width, (high - low) / 2)
+    # ponytail: configured range is the calibration knob; phase noise stays inside it.
+    center = max(low + half_width, min(high - half_width, center + stable_offset + phase_offset))
     return f"{round(center - half_width)}-{round(center + half_width)}"

@@ -35,6 +35,8 @@ COMMON_MODELS_SH="${COMMON_MODELS_SH:-$SCRIPT_DIR/../scripts/models.sh}"
 : "${HF_TOKEN:=}"
 : "${MODELSCOPE_CACHE:=/root/.cache/modelscope}"
 : "${REMOVE_LEGACY_RELEASES:=true}"
+: "${GPU_WORKLOAD_NAMESPACE:=demo}"
+: "${GPU_INVENTORY:=$SCRIPT_DIR/../gpu-sim/generated/node-inventory.json}"
 
 # 校验 helm
 command -v helm >/dev/null 2>&1 || { echo "ERROR: helm not found" >&2; exit 1; }
@@ -174,8 +176,27 @@ set_profile_args() {
   esac
 }
 
+phase_driver_pending=false
+if [ -f "$GPU_INVENTORY" ]; then
+  phase_driver_pending=true
+  kubectl create namespace "$GPU_WORKLOAD_NAMESPACE" --dry-run=client -o yaml |
+    kubectl apply -f - >/dev/null
+  echo "==> Phase driver: enabled (workloads=$GPU_WORKLOAD_NAMESPACE inventory=$GPU_INVENTORY)"
+else
+  echo "==> Phase driver: skipped (inventory not found: $GPU_INVENTORY)"
+fi
+echo
+
 while IFS=$'\t' read -r release served_model tokenizer_model port profile max_model_len traffic_weight revision; do
   set_profile_args "$profile"
+  phase_driver_enabled="$phase_driver_pending"
+  PHASE_DRIVER_ARGS=(
+    --set phaseDriver.enabled="$phase_driver_enabled"
+    --set-string phaseDriver.workloadNamespace="$GPU_WORKLOAD_NAMESPACE"
+  )
+  if [ "$phase_driver_enabled" = "true" ]; then
+    PHASE_DRIVER_ARGS+=(--set-file phaseDriver.inventory="$GPU_INVENTORY")
+  fi
   echo "==> Deploying $release  model=$served_model  tokenizer=$tokenizer_model  port=$port  profile=$profile  context=$max_model_len  weight=$traffic_weight  revision=$revision"
   helm upgrade --install "$release" "$CHART" \
     --namespace "$NS" --create-namespace \
@@ -192,7 +213,9 @@ while IFS=$'\t' read -r release served_model tokenizer_model port profile max_mo
     --set vllmRender.modelScopeCache="$MODELSCOPE_CACHE" \
     --set-string vllmRender.modelRevision="$revision" \
     --set-string "env.HF_TOKEN=$HF_TOKEN" \
+    "${PHASE_DRIVER_ARGS[@]}" \
     "${PROFILE_ARGS[@]}"
+  phase_driver_pending=false
   echo
 done <<< "$MODEL_TABLE"
 

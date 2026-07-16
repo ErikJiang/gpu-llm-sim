@@ -32,8 +32,9 @@ namespace: gpu-sim
 releaseName: fake-gpu-operator
 
 nodes:
-  - name: kwok-h200-01
-    cpu: 224
+  - name: kw-best300
+    replicas: 16
+    cpu: 16
     memory: 2Ti
     architecture: amd64
     taints:
@@ -41,13 +42,12 @@ nodes:
         value: fake
         effect: NoSchedule
     gpu:
-      product: NVIDIA H200 141GB HBM3e
-      count: 8
-      memoryMiB: 144384
-      tflopsFP32: 67.0
+      product: BEST300 288GB
+      count: 32
+      memoryMiB: 294912
     workload:
-      modelRelease: deepseek-v4-pro
-      utilization: 68-92
+      gpuCount: 32
+      utilization: 65-90
 
 accelerator:
   imageRegistryMap:
@@ -66,7 +66,8 @@ accelerator:
 - `gpu.count >= 1`
 - `gpu.memoryMiB >= 1`
 - `architecture` 仅支持 `amd64` / `arm64`
-- `workload.modelRelease` 必填且符合 RFC1123
+- `workload.gpuCount` 必填，范围为 `1..gpu.count`
+- `workload.modelRelease` 可选；填写时必须符合 RFC1123
 - `workload.utilization` 必须是递增的 `0-100` 区间
 - `taints[].effect` ∈ {NoSchedule, NoExecute, PreferNoSchedule}
 - `accelerator.imageRegistryMap[].source` 和 `target` 都必填

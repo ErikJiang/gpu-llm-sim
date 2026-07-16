@@ -5,7 +5,7 @@
 `gpu-sim` 是 [fake-gpu-operator](https://github.com/run-ai/fake-gpu-operator) 的薄包装层：
 
 - 不修改 fake-gpu-operator 任何代码
-- 配置文件声明多节点（每节点指定 CPU / 内存 / 架构 / GPU / 模型映射 / utilization）
+- 配置文件声明多节点容量，每个节点用一个多 GPU shadow Pod 驱动全部卡
 - 一条命令完成安装：拉 fake-gpu-operator OCI chart → 装 KWOK → 装 fgo → 注入 KWOK 节点
 - 加速器/镜像替换入口：内置 daocloud 镜像作为国内网络默认
 - util 通过 shadow/demo pod 的 fgo annotation 驱动；`llm-sim/bench.sh` 可按业务阶段联动更新各节点区间
@@ -52,7 +52,10 @@ make check
 # 3. 一键安装
 make install
 
-# 4. 跑 shadow workload 触发每张 fake GPU 的 metrics
+# 已有旧环境或 topology 脏数据时
+make reinstall
+
+# 4. 跑 16 个 shadow workload，触发全部 512 卡的 utilization metrics
 make workload
 
 # 5. 卸载
@@ -70,39 +73,33 @@ namespace: gpu-sim                # K8s namespace
 releaseName: fake-gpu-operator    # helm release name
 
 nodes:                             # 节点列表
-  - name: kwok-h200                # 必填，RFC1123 模板名
-    replicas: 6                    # 可选，展开为 kwok-h200-01..06
-    cpu: 224
+  - name: kw-best300               # 必填，RFC1123 模板名
+    replicas: 16                   # 可选，展开为 kw-best300-01..16
+    cpu: 16
     memory: 2Ti
-    architecture: amd64            # GH200 使用 arm64
+    architecture: amd64
     taints:                        # 可选
       - key: kwok.x-k8s.io/node
         value: fake
         effect: NoSchedule
     gpu:
-      product: NVIDIA H200 141GB HBM3e
-      count: 8
-      memoryMiB: 144384            # 单卡显存
-      tflopsFP32: 67.0             # Node annotation/inventory metadata
+      product: BEST300 288GB
+      count: 32
+      memoryMiB: 294912            # 单卡显存
     workload:
-      modelRelease: deepseek-v4-pro
-      utilization: 68-92
+      gpuCount: 32                 # 等于本节点 gpu.count
+      utilization: 65-90
 ```
 
 `replicas` 必须是正整数；省略时保持单节点原名。`{product, count, memoryMiB}` 三元组相同的节点会被合并为同一 `nodePools.<name>`；不同则生成多个 pool。省略整个 `workload` 表示 idle reserve，不创建 shadow Pod。
 
 默认拓扑：
 
-| 模型 release | 节点形态 | GPU 总数 | utilization |
+| GPU / workload | 节点形态 | 容量 | utilization 覆盖 |
 | --- | --- | ---: | --- |
-| `deepseek-v4-pro` | 6× HGX H200（每节点 8×141GB） | 48 | 68-92 |
-| `glm-52` | 40× GH200 NVL2 风格 arm64 节点（每节点 2×144GB） | 80 | 58-88 |
-| `minimax-m3` | 4× 4-GPU H100 节点 | 16 | 66-91 |
-| `kimi-k27-code` | 4× 4-GPU H100 节点 | 16 | 64-90 |
-| `qwen37-plus` | 3× 4-GPU H100 节点 | 12 | 70-94 |
-| idle reserve | 5× 2-GPU A100 PCIe + 5× 2-GPU V100 SXM2 | 20 | 无 shadow Pod |
+| BEST300 288GB / unassigned | 16× 32-GPU | 512 | 512 |
 
-合计 67 个节点、192 张 GPU，其中 172 张 active、20 张 idle。active `modelRelease` 必须存在于 `llm-sim/models.env`；`workload.sh` 每次 apply 会清理旧 shadow Pod，再按映射为 active GPU 每卡创建一个 Pod。
+合计 16 个节点、512 张 fake GPU。每个节点只创建一个 shadow Pod，并一次申请该节点全部 32 张 GPU。`modelRelease` 为空，使用真实语义 `unassigned`，不虚构模型分配。
 
 完整配置示例见 [`config.example.yaml`](config.example.yaml)。
 
@@ -161,25 +158,46 @@ gpu-sim **不**自研 Prometheus exporter。所有 metrics 来自 fake-gpu-opera
 
 ### 控制 utilization 的方式
 
-fake-gpu-operator 的 status-updater 通过 pod annotation 决定 util/memory 区间。推荐使用 `workload.sh`，它会为每张 fake GPU 创建一个 shadow pod，避免多卡节点只有一张卡有 util 波动。`demo.sh` 仍保留为 GPU-only fallback。
+fake-gpu-operator 的 status-updater 通过 pod annotation 决定 util/memory 区间。推荐使用 `workload.sh`：每个节点一个 Pod，`workload.gpuCount` 等于节点 GPU 容量。这样只需 16 个 Pod，就能让 512 张卡全部产生 utilization。`demo.sh` 仍保留为 GPU-only fallback。
+
+status-exporter 会为每张卡保留一条 `container=""` 的设备基线，并为有 shadow Pod 的卡增加 workload 序列。因此 Dashboard 不能用原始 series 数量当 GPU 数量，也不能直接平均重复 UUID。推荐先按 UUID 去重：
+
+```promql
+# GPU 数量
+count(count by (UUID) (DCGM_FI_DEV_GPU_UTIL))
+
+# 每种 GPU 的真实池平均：同一 UUID 取 workload/基线中的最大值
+avg by (modelName) (
+  max by (UUID, modelName) (DCGM_FI_DEV_GPU_UTIL)
+)
+
+# 前五 GPU 池
+topk(5,
+  avg by (modelName) (
+    max by (UUID, modelName) (DCGM_FI_DEV_GPU_UTIL)
+  )
+)
+```
+
+全部 512 张卡都有 workload utilization；按 UUID 去重后，池平均不会再被大量 0% 基线稀释。
 
 ```yaml
 metadata:
   annotations:
-    run.ai/simulated-gpu-utilization: "30-50"   # % 区间
+    run.ai/simulated-gpu-utilization: "65-90"   # % 区间
     run.ai/simulated-gpu-memory: "1000-2000"   # MiB 区间
 ```
 
 ### 调整
 
 ```bash
-# 推荐：每张 fake GPU 一个 shadow pod
+# 推荐：每个 KWOK Node 一个多 GPU shadow pod
 make workload                         # 使用每个节点 workload.utilization
-WORKLOAD_UTIL="80-95" make workload
-WORKLOAD_UTIL="60-80" make workload-util
+WORKLOAD_UTIL="65-90" make workload
+WORKLOAD_UTIL="75-90" make workload-util
 
 # fallback：每个 KWOK 节点一个 demo pod，默认申请该节点全部 fake GPU
-DEMO_UTIL="80-95" make demo
+DEMO_UTIL="65-90" make demo
 
 # 删除 workload/demo pod
 make workload-delete
@@ -187,6 +205,8 @@ make demo-delete
 ```
 
 status-exporter 每 10s 在区间内随机一次（multi-node exporter 行为），dashboard 会看到区间内噪声。运行根目录 `make bench` 时，bench 默认读取 `generated/node-inventory.json`，按 `quiet/normal/busy/spike` 阶段为每个节点更新不同区间；阶段持续 2–8 分钟，现有 `[5m]` 聚合仍可看到趋势变化。
+
+phase driver 会把所有动态子区间钳制在配置的 `workload.utilization` 内。默认 `65-90`，因此各阶段及节点噪声不会越界；修改该字段即可统一调整边界。
 
 ```bash
 # 先创建 shadow pod，再持续生成 LLM + GPU 相关联的指标
@@ -211,15 +231,18 @@ make gen
 
 # 触发 GPU metrics
 make workload                         # 使用 config.yaml 逐节点 util
-WORKLOAD_UTIL="60-80" make workload   # 全局覆盖 util
+WORKLOAD_UTIL="65-90" make workload   # 全局覆盖 util
 make workload-delete                  # 清理 shadow pod
 make demo                             # fallback：每节点一个 demo pod
-DEMO_UTIL="60-80" make demo           # fallback 自定义 util
+DEMO_UTIL="65-90" make demo           # fallback 自定义 util
 make demo-delete                      # 清理 demo pod
 
 # 卸载
 make uninstall                  # 保留 KWOK controller / namespace
 make uninstall-all              # 完全卸载
+
+# 清理旧 Node/topology/shadow Pod 后重新部署
+make reinstall
 ```
 
 ---
@@ -246,7 +269,7 @@ gpu-sim/
 ├── Makefile                        # validate / check / gen / install / demo / uninstall
 ├── install.sh                      # 一键安装入口
 ├── uninstall.sh                    # 清理
-├── workload.sh                     # 推荐：每张 fake GPU 一个 shadow pod
+├── workload.sh                     # 推荐：每个 KWOK Node 一个多 GPU shadow pod
 ├── shadow-pod.template.yaml        # shadow workload 模板
 ├── demo.sh                         # fallback demo pod
 ├── config.example.yaml             # 用户配置样例（节点 + 加速器）

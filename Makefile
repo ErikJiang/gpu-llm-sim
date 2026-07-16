@@ -22,17 +22,21 @@ check: ## 校验 GPU 配置和 LLM Helm chart
 install-gpu: ## 安装 KWOK + fake-gpu-operator + fake GPU 节点
 	$(MAKE) -C $(GPU_DIR) CONFIG=$(GPU_CONFIG) install
 
+.PHONY: reinstall-gpu
+reinstall-gpu: ## 清理旧 fake GPU/脏 topology 后重新安装
+	$(MAKE) -C $(GPU_DIR) CONFIG=$(GPU_CONFIG) reinstall
+
 .PHONY: install-llm
 install-llm: ## 安装 LLM simulator 服务到真实节点
 	$(MAKE) -C $(LLM_DIR) NAMESPACE=$(LLM_NAMESPACE) install
 
 .PHONY: apply-gpu-load
-apply-gpu-load: ## 创建每张 fake GPU 一个 shadow workload pod
+apply-gpu-load: ## 为配置采样卡创建 shadow workload pod
 	$(MAKE) -C $(GPU_DIR) CONFIG=$(GPU_CONFIG) gen
 	WORKLOAD_NAMESPACE=$(WORKLOAD_NAMESPACE) $(GPU_DIR)/workload.sh apply
 
 .PHONY: set-gpu-util
-set-gpu-util: ## 更新 shadow workload util，例：WORKLOAD_UTIL=80-95 make set-gpu-util
+set-gpu-util: ## 更新 shadow workload util，例：WORKLOAD_UTIL=65-90 make set-gpu-util
 	WORKLOAD_NAMESPACE=$(WORKLOAD_NAMESPACE) $(GPU_DIR)/workload.sh set-util
 
 .PHONY: bench

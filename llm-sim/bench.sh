@@ -121,7 +121,7 @@ import time
 import urllib.error
 import urllib.request
 
-sys.path.insert(0, os.environ["SCRIPT_DIR"])
+sys.path.insert(0, os.path.join(os.environ["SCRIPT_DIR"], "helm", "multi-model", "files"))
 
 from traffic_profile import (
     TrafficController,

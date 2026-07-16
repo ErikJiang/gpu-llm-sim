@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import inspect
 import random
 import re
 import subprocess
+import sys
 import tempfile
 import unittest
 from collections import Counter
@@ -21,8 +23,9 @@ HELM_VALUES = ROOT / "llm-sim" / "helm" / "multi-model" / "values.yaml"
 GPU_CONFIG = ROOT / "gpu-sim" / "config.yaml"
 GPU_WORKLOAD = ROOT / "gpu-sim" / "workload.sh"
 CONFIGGEN_PATH = ROOT / "gpu-sim" / "tools" / "configgen" / "configgen.py"
-TRAFFIC_PROFILE_PATH = ROOT / "llm-sim" / "traffic_profile.py"
+TRAFFIC_PROFILE_PATH = ROOT / "llm-sim" / "helm" / "multi-model" / "files" / "traffic_profile.py"
 SYNTHETIC_METRICS_PATH = ROOT / "llm-sim" / "helm" / "multi-model" / "files" / "synthetic_metrics.py"
+PHASE_DRIVER_PATH = ROOT / "llm-sim" / "helm" / "multi-model" / "files" / "phase_driver.py"
 
 spec = importlib.util.spec_from_file_location("gpu_sim_configgen", CONFIGGEN_PATH)
 assert spec and spec.loader
@@ -39,20 +42,15 @@ EXPECTED_MODELS = [
 ]
 
 EXPECTED_GPU_TOTALS = {
-    "NVIDIA H200 141GB HBM3e": 48,
-    "NVIDIA GH200 144GB HBM3e": 80,
-    "NVIDIA H100 80GB HBM3": 44,
-    "NVIDIA A100-PCIE-80GB": 10,
-    "NVIDIA V100-SXM2-32GB": 10,
+    "BEST300 288GB": 512,
+}
+
+EXPECTED_SAMPLED_GPU_TOTALS = {
+    "BEST300 288GB": 512,
 }
 
 EXPECTED_RELEASE_TOTALS = {
-    "deepseek-v4-pro": 48,
-    "glm-52": 80,
-    "minimax-m3": 16,
-    "kimi-k27-code": 16,
-    "qwen37-plus": 12,
-    None: 20,
+    None: 512,
 }
 
 
@@ -82,11 +80,27 @@ def load_traffic_profile():
 
 
 def load_synthetic_metrics():
+    sys.path.insert(0, str(SYNTHETIC_METRICS_PATH.parent))
     spec = importlib.util.spec_from_file_location("llm_sim_synthetic_metrics", SYNTHETIC_METRICS_PATH)
     assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    try:
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    finally:
+        sys.path.pop(0)
+
+
+def load_phase_driver():
+    sys.path.insert(0, str(PHASE_DRIVER_PATH.parent))
+    spec = importlib.util.spec_from_file_location("llm_sim_phase_driver", PHASE_DRIVER_PATH)
+    assert spec and spec.loader
+    try:
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    finally:
+        sys.path.pop(0)
 
 
 class TrafficProfileTests(unittest.TestCase):
@@ -158,19 +172,21 @@ class TrafficProfileTests(unittest.TestCase):
         self.assertLessEqual(normal_tokens, 4_900_000)
 
     def test_gpu_ranges_follow_phase_and_stay_valid(self) -> None:
-        quiet = self.profile.gpu_utilization_range("68-92", "quiet", "kwok-h200-01")
-        normal = self.profile.gpu_utilization_range("68-92", "normal", "kwok-h200-01")
-        spike = self.profile.gpu_utilization_range("68-92", "spike", "kwok-h200-01")
+        ranges = {
+            phase: self.profile.gpu_utilization_range("65-90", phase, "kw-best300-01")
+            for phase in ("quiet", "normal", "busy", "spike")
+        }
+        bounds = {phase: tuple(map(int, value.split("-"))) for phase, value in ranges.items()}
+        for low, high in bounds.values():
+            self.assertTrue(65 <= low < high <= 90)
 
-        quiet_low, quiet_high = map(int, quiet.split("-"))
-        normal_low, normal_high = map(int, normal.split("-"))
-        spike_low, spike_high = map(int, spike.split("-"))
-        self.assertTrue(0 <= quiet_low < quiet_high <= 100)
-        self.assertTrue(0 <= normal_low < normal_high <= 100)
-        self.assertTrue(0 <= spike_low < spike_high <= 100)
-        self.assertGreaterEqual((spike_low + spike_high) - (quiet_low + quiet_high), 40)
+        quiet_low, quiet_high = bounds["quiet"]
+        normal_low, normal_high = bounds["normal"]
+        spike_low, spike_high = bounds["spike"]
+        self.assertGreaterEqual((spike_low + spike_high) - (quiet_low + quiet_high), 20)
         self.assertLess(quiet_high, normal_high)
-        self.assertLess(normal_high, spike_high)
+        self.assertLess(normal_low, spike_low)
+        self.assertEqual(self.profile.gpu_utilization_range("80-82", "normal", "node"), "80-82")
 
     def test_phase_weights_cover_current_model_releases(self) -> None:
         expected = {row[0] for row in EXPECTED_MODELS}
@@ -227,13 +243,151 @@ class TrafficProfileTests(unittest.TestCase):
         )
 
         windowed = metrics.SyntheticMetrics("GLM-5.2", weight=24, seed=41002)
+        controller = metrics.TrafficController(random.Random(windowed.seed), 0.0)
         counters = [0.0]
         for minute in range(1, 31):
-            windowed.advance(60.0, metrics.load_factor(minute * 60, windowed.seed))
+            windowed.advance(60.0, metrics.load_factor(controller, minute * 60))
             counters.append(windowed.request_success)
         five_minute_rates = [(counters[i] - counters[i - 5]) / 300 for i in range(5, len(counters))]
         self.assertGreater(max(five_minute_rates) - min(five_minute_rates), 15.2 * 0.15)
         self.assertLess(max(five_minute_rates), 15.2 * 1.7)
+
+    def test_synthetic_metrics_use_stochastic_load(self) -> None:
+        metrics = load_synthetic_metrics()
+        self.assertEqual(list(inspect.signature(metrics.load_factor).parameters), ["controller", "elapsed"])
+
+        controller = metrics.TrafficController(random.Random(41002), 0.0)
+        loads = [metrics.load_factor(controller, minute * 60.0) for minute in range(361)]
+        lag = 25
+        left, right = loads[:-lag], loads[lag:]
+        left_mean = sum(left) / len(left)
+        right_mean = sum(right) / len(right)
+        correlation = sum(
+            (x - left_mean) * (y - right_mean) for x, y in zip(left, right, strict=True)
+        ) / (
+            sum((x - left_mean) ** 2 for x in left)
+            * sum((y - right_mean) ** 2 for y in right)
+        ) ** 0.5
+
+        self.assertGreaterEqual(min(loads), 0.7)
+        self.assertLessEqual(max(loads), 1.6)
+        self.assertLess(abs(correlation), 0.5)
+        source = SYNTHETIC_METRICS_PATH.read_text(encoding="utf-8")
+        self.assertNotIn("math.sin", source)
+        self.assertNotIn("PHASES", source)
+
+    def test_synthetic_ttft_sla_has_mixed_model_outcomes(self) -> None:
+        metrics = load_synthetic_metrics()
+        passing = set()
+        p99 = {}
+
+        for index, model in enumerate(metrics.LATENCY_PROFILES):
+            state = metrics.SyntheticMetrics(model, weight=20, seed=41000 + index)
+            state.advance(300.0, load=1.6)
+            within_sla = state.ttft.buckets[state.ttft.bounds.index(0.5)] / state.ttft.count
+            if within_sla >= 0.99:
+                passing.add(model)
+            target = state.ttft.count * 0.99
+            previous_count = 0
+            previous_bound = 0.0
+            for bound, count in zip(state.ttft.bounds, state.ttft.buckets, strict=True):
+                if count >= target:
+                    p99[model] = previous_bound + (
+                        (bound - previous_bound) * (target - previous_count) / (count - previous_count)
+                    )
+                    break
+                previous_count, previous_bound = count, bound
+
+        self.assertEqual(passing, {"Kimi-K2.7-Code", "Qwen3.7-Plus"})
+        self.assertLessEqual(p99["Kimi-K2.7-Code"], 0.49)
+        self.assertLessEqual(p99["Qwen3.7-Plus"], 0.46)
+
+
+class PhaseDriverTests(unittest.TestCase):
+    def test_sync_phase_patches_shadow_pods_from_inventory_baselines(self) -> None:
+        driver = load_phase_driver()
+        calls = []
+
+        def request(method, path, payload=None):
+            calls.append((method, path, payload))
+            if method == "GET":
+                return {
+                    "items": [
+                        {
+                            "metadata": {
+                                "name": "gpu-load-kwok-h200-01-0",
+                                "labels": {"gpu-llm-sim/node": "kwok-h200-01"},
+                            }
+                        },
+                        {
+                            "metadata": {
+                                "name": "gpu-load-kwok-gh200-01-0",
+                                "labels": {"gpu-llm-sim/node": "kwok-gh200-01"},
+                            }
+                        },
+                    ]
+                }
+            return {}
+
+        baselines = {"kwok-h200-01": "68-92", "kwok-gh200-01": "58-88"}
+        patched = driver.sync_phase("demo", baselines, "busy", request)
+
+        self.assertEqual(patched, 2)
+        self.assertEqual(calls[0][:2], ("GET", "/api/v1/namespaces/demo/pods?labelSelector=app%3Dgpu-sim-shadow"))
+        for method, path, payload in calls[1:]:
+            self.assertEqual(method, "PATCH")
+            self.assertIn("/api/v1/namespaces/demo/pods/gpu-load-kwok-", path)
+            node = "kwok-gh200-01" if "kwok-gh200" in path else "kwok-h200-01"
+            self.assertEqual(
+                payload,
+                {
+                    "metadata": {
+                        "annotations": {
+                            "run.ai/simulated-gpu-utilization": driver.gpu_utilization_range(
+                                baselines[node], "busy", node
+                            )
+                        }
+                    }
+                },
+            )
+
+        self.assertEqual(driver.sync_phase("demo", baselines, "quiet", lambda *_args: {"items": []}), 0)
+
+    def test_helm_renders_single_least_privilege_driver(self) -> None:
+        chart = ROOT / "llm-sim" / "helm" / "multi-model"
+        rendered = subprocess.run(
+            [
+                "helm", "template", "test", str(chart), "--namespace", "llm-sim",
+                "--set", "phaseDriver.enabled=true",
+                "--set", "phaseDriver.workloadNamespace=demo",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+
+        self.assertIn("kind: ServiceAccount", rendered)
+        self.assertIn("kind: Role", rendered)
+        self.assertIn("kind: RoleBinding", rendered)
+        self.assertIn("test-multi-model-phase-driver", rendered)
+        self.assertIn("type: Recreate", rendered)
+        self.assertIn("phase_driver.py", rendered)
+        self.assertIn("node-inventory.json", rendered)
+        self.assertEqual(rendered.count("checksum/config:"), 2)
+        self.assertRegex(rendered, r"verbs:\s+- get\s+- list\s+- patch")
+        self.assertNotIn("kind: ClusterRole", rendered)
+
+        disabled = subprocess.run(
+            ["helm", "template", "test", str(chart), "--namespace", "llm-sim"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        self.assertNotIn("test-multi-model-phase-driver", disabled)
+
+        install = INSTALL.read_text(encoding="utf-8")
+        self.assertIn('phaseDriver.enabled="$phase_driver_enabled"', install)
+        self.assertIn('--set-file phaseDriver.inventory=', install)
 
 
 class ModelRegistryTests(unittest.TestCase):
@@ -347,12 +501,13 @@ class ModelRegistryTests(unittest.TestCase):
             text=True,
         ).stdout
         self.assertIn("synthetic_metrics.py", rendered)
+        self.assertIn("traffic_profile.py", rendered)
         self.assertIn("containerPort: 9090", rendered)
         self.assertIn("port: 9090", rendered)
         port_names = re.findall(r"(?m)^\s+- name: (\S+)\n\s+containerPort:", rendered)
         self.assertTrue(all(len(name) <= 15 for name in port_names), port_names)
         self.assertIn("targetPort: metrics", rendered)
-        self.assertIn('insight.opentelemetry.io/metric-port: "9090"', rendered)
+        self.assertEqual(rendered.count('insight.opentelemetry.io/metric-scrape: "true"'), 1)
 
     def test_profiles_activate_load_sensitive_latency(self) -> None:
         install = INSTALL.read_text(encoding="utf-8")
@@ -385,12 +540,10 @@ class GpuTopologyTests(unittest.TestCase):
 
     def test_replica_expansion_is_deterministic_and_unique(self) -> None:
         names = [node["name"] for node in self.config["nodes"]]
-        self.assertEqual(len(names), 67)
-        self.assertEqual(len(set(names)), 67)
-        self.assertIn("kwok-h200-01", names)
-        self.assertIn("kwok-h200-06", names)
-        self.assertIn("kwok-gh200-01", names)
-        self.assertIn("kwok-gh200-40", names)
+        self.assertEqual(len(names), 16)
+        self.assertEqual(len(set(names)), 16)
+        self.assertIn("kw-best300-01", names)
+        self.assertIn("kw-best300-16", names)
         self.assertTrue(all("replicas" not in node for node in self.config["nodes"]))
 
     def test_gpu_catalog_has_realistic_capacity_and_model_mapping(self) -> None:
@@ -399,45 +552,54 @@ class GpuTopologyTests(unittest.TestCase):
         for node in self.config["nodes"]:
             count = node["gpu"]["count"]
             product_totals[node["gpu"]["product"]] += count
-            release_totals[node.get("workload", {}).get("modelRelease")] += count
+            release_totals[node.get("workload", {}).get("modelRelease")] += (
+                node.get("workload", {}).get("gpuCount", 0)
+            )
 
-        self.assertEqual(len(self.config["nodes"]), 67)
-        self.assertEqual(sum(product_totals.values()), 192)
+        self.assertEqual(len(self.config["nodes"]), 16)
+        self.assertEqual(sum(product_totals.values()), 512)
         self.assertEqual(dict(product_totals), EXPECTED_GPU_TOTALS)
         self.assertEqual(dict(release_totals), EXPECTED_RELEASE_TOTALS)
 
-    def test_gh200_nodes_render_as_arm64_nvl2_hosts(self) -> None:
+    def test_best300_nodes_render_as_32_gpu_288gb_hosts(self) -> None:
         _, node_to_pool = configgen.build_node_pools(self.config["nodes"])
         manifests = configgen.build_kwok_nodes(self.config, node_to_pool)
-        gh200_nodes = [
-            manifest
-            for source, manifest in zip(self.config["nodes"], manifests, strict=True)
-            if source["gpu"]["product"] == "NVIDIA GH200 144GB HBM3e"
-        ]
 
-        self.assertEqual(len(gh200_nodes), 40)
-        for node in gh200_nodes:
-            self.assertEqual(node["metadata"]["labels"]["kubernetes.io/arch"], "arm64")
-            self.assertEqual(node["status"]["nodeInfo"]["architecture"], "arm64")
-            self.assertEqual(node["status"]["capacity"]["cpu"], "144")
-            self.assertEqual(node["status"]["capacity"]["memory"], "960Gi")
-            self.assertEqual(node["metadata"]["labels"]["gpu-llm-sim/model-release"], "glm-52")
+        self.assertEqual(len(manifests), 16)
+        for source, node in zip(self.config["nodes"], manifests, strict=True):
+            self.assertEqual(source["gpu"]["product"], "BEST300 288GB")
+            self.assertEqual(source["gpu"]["memoryMiB"], 294912)
+            self.assertEqual(source["cpu"], 16)
+            self.assertEqual(node["metadata"]["labels"]["kubernetes.io/arch"], "amd64")
+            self.assertEqual(node["status"]["capacity"]["nvidia.com/gpu"], "32")
+            self.assertNotIn("gpu-llm-sim/model-release", node["metadata"]["labels"])
 
     def test_inventory_keeps_explicit_release_and_utilization(self) -> None:
         _, node_to_pool = configgen.build_node_pools(self.config["nodes"])
         inventory = configgen.build_node_inventory(self.config, node_to_pool)
 
-        self.assertEqual(inventory["totalGpuCount"], 192)
-        active = [node for node in inventory["nodes"] if node["modelRelease"]]
-        idle = [node for node in inventory["nodes"] if not node["modelRelease"]]
-        self.assertEqual(sum(node["gpuCount"] for node in active), 172)
-        self.assertEqual(sum(node["gpuCount"] for node in idle), 20)
-        for node in active:
-            self.assertRegex(node["modelRelease"], r"^[a-z0-9-]+$")
-            self.assertRegex(node["utilization"], r"^\d{1,3}-\d{1,3}$")
-            self.assertIn(node["architecture"], {"amd64", "arm64"})
+        self.assertEqual(inventory["totalGpuCount"], 512)
+        sampled = [node for node in inventory["nodes"] if node["shadowGpuCount"]]
+        idle = [node for node in inventory["nodes"] if not node["shadowGpuCount"]]
+        self.assertEqual(inventory["totalShadowGpuCount"], 512)
+        self.assertEqual(inventory["totalShadowPodCount"], 16)
+        self.assertEqual(sum(node["shadowGpuCount"] for node in sampled), 512)
+        sampled_by_product = Counter()
+        for node in sampled:
+            sampled_by_product[node["gpuProduct"]] += node["shadowGpuCount"]
+        self.assertEqual(dict(sampled_by_product), EXPECTED_SAMPLED_GPU_TOTALS)
+        self.assertEqual(
+            {node["gpuProduct"] for node in sampled},
+            set(EXPECTED_GPU_TOTALS),
+        )
+        self.assertEqual(len({node["pool"] for node in sampled}), 1)
+        for node in sampled:
+            self.assertEqual(node["shadowGpuCount"], node["gpuCount"])
+            self.assertEqual(node["utilization"], "65-90")
+            self.assertEqual(node["architecture"], "amd64")
         for node in idle:
             self.assertEqual(node["utilization"], "")
+        self.assertEqual(idle, [])
 
     def test_invalid_architecture_and_utilization_are_rejected(self) -> None:
         config = copy.deepcopy(self.source_config)
@@ -447,6 +609,11 @@ class GpuTopologyTests(unittest.TestCase):
         errors = configgen.validate_config(config)
         self.assertTrue(any("architecture" in error for error in errors))
         self.assertTrue(any("utilization" in error for error in errors))
+
+        config = copy.deepcopy(self.source_config)
+        config["nodes"][0].setdefault("workload", {})["gpuCount"] = 99
+        errors = configgen.validate_config(config)
+        self.assertTrue(any("workload.gpuCount" in error for error in errors))
 
     def test_invalid_replicas_are_rejected_and_idle_nodes_are_allowed(self) -> None:
         for invalid in (0, -1, True, 1.5, "2"):
@@ -464,7 +631,10 @@ class GpuTopologyTests(unittest.TestCase):
         workload = GPU_WORKLOAD.read_text(encoding="utf-8")
         self.assertNotIn("i % len(models)", workload)
         self.assertIn("node.get('modelRelease', '')", workload)
-        self.assertIn("if not release:", workload)
+        self.assertIn("node.get('shadowGpuCount', 0)", workload)
+        self.assertIn("'unassigned'", workload)
+        self.assertNotIn("range(shadow_gpu_count)", workload)
+        self.assertIn("{{GPU_REQUEST}}", workload)
         self.assertGreaterEqual(
             workload.count('kubectl delete pods -n "$WORKLOAD_NAMESPACE" -l app=gpu-sim-shadow'),
             2,
@@ -473,6 +643,24 @@ class GpuTopologyTests(unittest.TestCase):
     def test_shadow_workload_exposes_node_label(self) -> None:
         template = (ROOT / "gpu-sim" / "shadow-pod.template.yaml").read_text(encoding="utf-8")
         self.assertIn("gpu-llm-sim/node: {{NODE_NAME}}", template)
+        self.assertIn("nvidia.com/gpu: {{GPU_REQUEST}}", template)
+        self.assertNotIn("{{GPU_INDEX}}", template)
+
+    def test_generated_nodes_are_owned_and_uninstall_handles_legacy_data(self) -> None:
+        _, node_to_pool = configgen.build_node_pools(self.config["nodes"])
+        manifests = configgen.build_kwok_nodes(self.config, node_to_pool)
+        self.assertTrue(
+            all(
+                node["metadata"]["labels"]["app.kubernetes.io/managed-by"] == "gpu-sim"
+                for node in manifests
+            )
+        )
+
+        uninstall = (ROOT / "gpu-sim" / "uninstall.sh").read_text(encoding="utf-8")
+        self.assertIn("app.kubernetes.io/managed-by=gpu-sim", uninstall)
+        self.assertIn("kwok-gpu-a", uninstall)
+        self.assertIn("kwok-gpu-b", uninstall)
+        self.assertIn("node-topology=true", uninstall)
 
 
 if __name__ == "__main__":

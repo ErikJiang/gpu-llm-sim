@@ -3,7 +3,7 @@
 # Placeholders (double braces, matched by demo.sh sed):
 #   {{NODE_NAME}}       - target KWOK node name
 #   {{POOL_NAME}}       - node pool
-#   {{DEMO_UTIL}}        - fgo annotation min-max (default 30-50)
+#   {{DEMO_UTIL}}        - fgo annotation min-max (default 65-90)
 #   {{DEMO_MEM_USED}}   - fgo annotation min-max in MiB (default 1000-2000)
 #   {{GPU_REQUEST}}     - requested fake GPU count
 #   {{DEMO_IMAGE}}      - pod image

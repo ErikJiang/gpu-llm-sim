@@ -11,15 +11,17 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from traffic_profile import TrafficController
 
-TTFT_BOUNDS = (0.001, 0.005, 0.01, 0.02, 0.04, 0.06, 0.08, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 10)
+
+TTFT_BOUNDS = (0.001, 0.005, 0.01, 0.02, 0.04, 0.06, 0.08, 0.1, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.75, 1, 2.5, 5, 10)
 TPOT_BOUNDS = (0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.5, 1)
 LATENCY_PROFILES = {
-    "GLM-5.2": (0.23, 0.019),
-    "DeepSeek-V4-Pro": (0.27, 0.018),
-    "MiniMax-M3": (0.22, 0.017),
-    "Kimi-K2.7-Code": (0.20, 0.016),
-    "Qwen3.7-Plus": (0.18, 0.017),
+    "GLM-5.2": (0.23, 0.019, 0.42),
+    "DeepSeek-V4-Pro": (0.27, 0.018, 0.42),
+    "MiniMax-M3": (0.22, 0.017, 0.42),
+    "Kimi-K2.7-Code": (0.20, 0.016, 0.24),
+    "Qwen3.7-Plus": (0.18, 0.017, 0.26),
 }
 MODEL_RPS = {
     "GLM-5.2": 15.2,
@@ -29,7 +31,6 @@ MODEL_RPS = {
     "DeepSeek-V4-Pro": 10.9,
 }
 MODEL_RPS_TOTAL = sum(MODEL_RPS.values())
-PHASES = ((240, 0.78), (360, 1.0), (300, 1.2), (180, 1.48), (420, 0.94))
 TOTAL_TOKENS_PER_SECOND = 4_450_572.0
 
 
@@ -92,9 +93,9 @@ class SyntheticMetrics:
             sample_total = requests + self.sample_carry
             samples = int(sample_total)
             self.sample_carry = sample_total - samples
-            ttft_base, tpot_base = LATENCY_PROFILES.get(self.model, (0.22, 0.018))
+            ttft_base, tpot_base, ttft_sigma = LATENCY_PROFILES.get(self.model, (0.22, 0.018, 0.42))
             for _ in range(samples):
-                ttft = self.random.lognormvariate(math.log(ttft_base * (0.65 + 0.35 * load)), 0.42)
+                ttft = self.random.lognormvariate(math.log(ttft_base * (0.65 + 0.35 * load)), ttft_sigma)
                 tpot = self.random.lognormvariate(math.log(tpot_base * (0.8 + 0.2 * load)), 0.25)
                 if self.random.random() < 0.02:
                     ttft *= 1.8
@@ -130,18 +131,8 @@ class SyntheticMetrics:
             return '\n'.join(lines) + '\n'
 
 
-def load_factor(elapsed: float, seed: int) -> float:
-    position = (elapsed + seed % 180) % sum(duration for duration, _ in PHASES)
-    previous = PHASES[-1][1]
-    for duration, target in PHASES:
-        if position < duration:
-            blend = min(1.0, position / 60)
-            smooth = blend * blend * (3 - 2 * blend)
-            drift = 1 + 0.055 * math.sin(elapsed / 37 + seed)
-            return min(1.6, max(0.7, (previous + (target - previous) * smooth) * drift))
-        position -= duration
-        previous = target
-    return 1.0
+def load_factor(controller: TrafficController, elapsed: float) -> float:
+    return min(1.6, max(0.7, controller.sample(elapsed).multiplier))
 
 
 def main() -> None:
@@ -149,6 +140,7 @@ def main() -> None:
     weight = float(os.environ.get('SYNTHETIC_WEIGHT', '20'))
     seed = int(os.environ.get('SYNTHETIC_SEED', '41000'))
     state = SyntheticMetrics(model, weight, seed, float(os.environ.get('SYNTHETIC_BASE_RPS', '63')))
+    controller = TrafficController(random.Random(seed), 0.0)
     started = previous = time.monotonic()
 
     def update() -> None:
@@ -156,7 +148,7 @@ def main() -> None:
         while True:
             time.sleep(1)
             now = time.monotonic()
-            state.advance(now - previous, load_factor(now - started, seed))
+            state.advance(now - previous, load_factor(controller, now - started))
             previous = now
 
     class Handler(BaseHTTPRequestHandler):

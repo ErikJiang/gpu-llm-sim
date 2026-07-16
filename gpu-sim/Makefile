@@ -25,8 +25,13 @@ gen: ## 把 config.yaml 转译为 values + KWOK nodes + monitoring + install-par
 install: ## 一键安装（包含 gen + helm pull + KWOK + apply 节点 + monitoring）
 	./install.sh
 
+.PHONY: reinstall
+reinstall: ## 清理旧 gpu-sim/遗留 topology 后重新安装（保留 KWOK controller）
+	./uninstall.sh
+	./install.sh
+
 .PHONY: workload
-workload: gen ## 在每张 fake GPU 上跑一个 shadow pod（推荐，驱动 GPU util metrics）
+workload: gen ## 每个 KWOK Node 跑一个多 GPU shadow pod
 	./workload.sh apply
 
 .PHONY: workload-delete
@@ -34,7 +39,7 @@ workload-delete: ## 删除所有 shadow workload pod
 	./workload.sh delete
 
 .PHONY: workload-util
-workload-util: ## 更新 shadow workload util annotation（例：WORKLOAD_UTIL=80-95 make workload-util）
+workload-util: ## 更新 shadow workload util annotation（例：WORKLOAD_UTIL=65-90 make workload-util）
 	./workload.sh set-util
 
 .PHONY: demo

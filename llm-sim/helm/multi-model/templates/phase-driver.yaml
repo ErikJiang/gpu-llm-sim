@@ -1,0 +1,84 @@
+{{- if .Values.phaseDriver.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "multi-model.fullname" . }}-phase-driver
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "multi-model.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "multi-model.fullname" . }}-phase-driver
+  namespace: {{ .Values.phaseDriver.workloadNamespace }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs:
+      - get
+      - list
+      - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "multi-model.fullname" . }}-phase-driver
+  namespace: {{ .Values.phaseDriver.workloadNamespace }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "multi-model.fullname" . }}-phase-driver
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "multi-model.fullname" . }}-phase-driver
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "multi-model.fullname" . }}-phase-driver
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "multi-model.labels" . | nindent 4 }}
+    app.kubernetes.io/component: phase-driver
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "multi-model.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: phase-driver
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print .Template.BasePath "/configmap.yaml") . | sha256sum }}
+      labels:
+        {{- include "multi-model.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: phase-driver
+    spec:
+      serviceAccountName: {{ include "multi-model.fullname" . }}-phase-driver
+      containers:
+        - name: phase-driver
+          image: {{ .Values.vllmRender.image }}
+          imagePullPolicy: {{ .Values.vllmRender.imagePullPolicy }}
+          command: ["python3", "/driver/phase_driver.py"]
+          env:
+            - name: WORKLOAD_NAMESPACE
+              value: {{ .Values.phaseDriver.workloadNamespace | quote }}
+          resources:
+            requests:
+              cpu: 10m
+              memory: 24Mi
+            limits:
+              memory: 96Mi
+          volumeMounts:
+            - name: driver
+              mountPath: /driver
+              readOnly: true
+      volumes:
+        - name: driver
+          configMap:
+            name: {{ include "multi-model.fullname" . }}-config
+{{- end }}

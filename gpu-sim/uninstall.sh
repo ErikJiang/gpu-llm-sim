@@ -2,9 +2,9 @@
 # uninstall.sh — 清理 gpu-sim 安装的 K8s 资源
 #
 # 步骤：
-#   1. helm uninstall
-#   2. 删除 KWOK 节点（local manifest 不存在时按名称逐删）
-#   3. 清理 demo namespace (默认只删 demo pod，保留 namespace)
+#   1. 清理 shadow/demo Pod
+#   2. helm uninstall
+#   3. 删除 gpu-sim 管理的 KWOK 节点和遗留 topology ConfigMap
 #   4. 删除 KWOK controller（local manifest 不存在时从 URL 重新拉取）
 #   5. （可选）删除 namespace — 默认不删
 #
@@ -65,7 +65,21 @@ fi
 log "namespace: $GPU_SIM_NAMESPACE"
 log "release:   $GPU_SIM_RELEASE"
 
-# —— 1. helm uninstall ——
+# —— 1. 清理 demo namespace 下的 shadow/demo pod ——
+DEMO_NAMESPACE="${DEMO_NAMESPACE:-demo}"
+if kubectl get namespace "$DEMO_NAMESPACE" >/dev/null 2>&1; then
+  for app in gpu-sim-shadow gpu-sim-demo; do
+    if kubectl -n "$DEMO_NAMESPACE" get pod -l "app=$app" -o name 2>/dev/null | grep -q .; then
+      log "deleting $app pods in namespace '$DEMO_NAMESPACE'"
+      kubectl -n "$DEMO_NAMESPACE" delete pods -l "app=$app" --ignore-not-found 2>&1 | sed "s|^|  |"
+      ok "$app pods deleted"
+    fi
+  done
+else
+  log "namespace '$DEMO_NAMESPACE' not found, skipping workload cleanup"
+fi
+
+# —— 2. helm uninstall ——
 if helm status "$GPU_SIM_RELEASE" -n "$GPU_SIM_NAMESPACE" >/dev/null 2>&1; then
   log "uninstalling helm release $GPU_SIM_RELEASE"
   helm uninstall "$GPU_SIM_RELEASE" -n "$GPU_SIM_NAMESPACE"
@@ -74,7 +88,7 @@ else
   warn "helm release $GPU_SIM_RELEASE not found, skipping"
 fi
 
-# —— 2. 删除 KWOK 节点 ——
+# —— 3. 删除 KWOK 节点 ——
 if [ -f "$GENERATED_DIR/kwok-nodes.yaml" ]; then
   log "deleting KWOK node manifests (from local file)"
   kubectl delete --ignore-not-found -f "$GENERATED_DIR/kwok-nodes.yaml" 2>&1 | sed "s|^|  |"
@@ -96,7 +110,35 @@ else
   fi
 fi
 
-# —— 2b. 删除 ServiceMonitor ——
+# 新版本按 managed label 清理；旧版本没有 label，按本项目固定命名迁移清理。
+log "deleting managed and legacy gpu-sim KWOK nodes"
+kubectl delete nodes -l app.kubernetes.io/managed-by=gpu-sim --ignore-not-found 2>&1 | sed "s|^|  |" || true
+while IFS= read -r node_ref; do
+  node="${node_ref#node/}"
+  case "$node" in
+    kwok-h200-*|kwok-gh200-*|kwok-h100-*|kwok-a100-pcie-*|kwok-v100-sxm2-*|kwok-gpu-a|kwok-gpu-b)
+      kubectl delete node "$node" --ignore-not-found 2>&1 | sed "s|^|  |"
+      ;;
+  esac
+done < <(kubectl get nodes -l type=kwok -o name 2>/dev/null || true)
+ok "managed and legacy gpu-sim KWOK nodes deleted"
+
+# topology ConfigMap 没有 ownerReferences，必须按对应节点名显式清理。
+if kubectl get namespace "$GPU_SIM_NAMESPACE" >/dev/null 2>&1; then
+  log "deleting legacy topology ConfigMaps"
+  while IFS= read -r cm_ref; do
+    cm="${cm_ref#configmap/}"
+    node="${cm#topology-}"
+    case "$node" in
+      kwok-h200-*|kwok-gh200-*|kwok-h100-*|kwok-a100-pcie-*|kwok-v100-sxm2-*|kwok-gpu-a|kwok-gpu-b)
+        kubectl -n "$GPU_SIM_NAMESPACE" delete configmap "$cm" --ignore-not-found 2>&1 | sed "s|^|  |"
+        ;;
+    esac
+  done < <(kubectl -n "$GPU_SIM_NAMESPACE" get configmaps -l node-topology=true -o name 2>/dev/null || true)
+  ok "legacy topology ConfigMaps deleted"
+fi
+
+# —— 3b. 删除 ServiceMonitor ——
 MONITORING_FILE="$SCRIPT_DIR/generated/monitoring.yaml"
 if [ -f "$MONITORING_FILE" ]; then
   log "deleting monitoring manifests"
@@ -104,30 +146,7 @@ if [ -f "$MONITORING_FILE" ]; then
   ok "monitoring manifests deleted"
 fi
 
-# —— 2c. 清理 demo namespace 下的 shadow/demo pod ——
-# workload.sh / demo.sh 默认在 demo namespace 跑 pause pod。
-# uninstall 时默认只删 pod、保留 namespace，避免影响其他 demo。
-DEMO_NAMESPACE="${DEMO_NAMESPACE:-demo}"
-if kubectl get namespace "$DEMO_NAMESPACE" >/dev/null 2>&1; then
-  if kubectl -n "$DEMO_NAMESPACE" get pod -l app=gpu-sim-shadow -o name 2>/dev/null | grep -q .; then
-    log "deleting gpu-sim-shadow pods in namespace '$DEMO_NAMESPACE'"
-    kubectl -n "$DEMO_NAMESPACE" delete pods -l app=gpu-sim-shadow --ignore-not-found 2>&1 | sed "s|^|  |"
-    ok "shadow pods deleted"
-  else
-    log "no gpu-sim-shadow pods in '$DEMO_NAMESPACE', skipping"
-  fi
-  if kubectl -n "$DEMO_NAMESPACE" get pod -l app=gpu-sim-demo -o name 2>/dev/null | grep -q .; then
-    log "deleting gpu-sim-demo pods in namespace '$DEMO_NAMESPACE'"
-    kubectl -n "$DEMO_NAMESPACE" delete pods -l app=gpu-sim-demo --ignore-not-found 2>&1 | sed "s|^|  |"
-    ok "demo pods deleted"
-  else
-    log "no gpu-sim-demo pods in '$DEMO_NAMESPACE', skipping"
-  fi
-else
-  log "namespace '$DEMO_NAMESPACE' not found, skipping demo cleanup"
-fi
-
-# —— 3. 删除 KWOK controller ——
+# —— 4. 删除 KWOK controller ——
 # 当 --kwok / --all 时：local manifest 不存在则从 KWOK_BASE_URL 重新拉取后删除
 delete_kwok_controller() {
   local kwok_yaml="$1"
@@ -160,14 +179,14 @@ else
   log "skipping KWOK controller deletion (use --kwok or --all to delete)"
 fi
 
-# —— 4. 可选：删除 namespace ——
+# —— 5. 可选：删除 namespace ——
 if [ "$KEEP_NS" = false ]; then
   log "deleting namespace $GPU_SIM_NAMESPACE"
   kubectl delete namespace "$GPU_SIM_NAMESPACE" --ignore-not-found 2>&1 | sed "s|^|  |"
   ok "namespace deleted"
 fi
 
-# —— 4b. 可选：删除 demo namespace ——
+# —— 5b. 可选：删除 demo namespace ——
 if [ "$KEEP_DEMO_NS" = false ]; then
   if kubectl get namespace "$DEMO_NAMESPACE" >/dev/null 2>&1; then
     log "deleting namespace $DEMO_NAMESPACE"
@@ -176,7 +195,7 @@ if [ "$KEEP_DEMO_NS" = false ]; then
   fi
 fi
 
-# —— 5. 清理本地生成文件（可选） ——
+# —— 6. 清理本地生成文件（可选） ——
 if [ -d "$GENERATED_DIR" ]; then
   log "local generated files preserved at $GENERATED_DIR/ (use 'make clean' to remove)"
 fi

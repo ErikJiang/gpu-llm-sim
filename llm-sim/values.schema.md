@@ -23,13 +23,15 @@
 
 > `VLLM_USE_MODELSCOPE=true` 在 sidecar 内固定设置。下载使用 allowlist，并显式排除 `*.safetensors`、`*.bin`、`*.gguf`、`*.pt`、`*.pth` 权重。
 
-## 指标注解（podAnnotations / service.annotations）
+## 指标注解（podAnnotations）
 
 ```yaml
 insight.opentelemetry.io/metric-path: /metrics
 insight.opentelemetry.io/metric-port: "9090"   # synthetic metrics exporter
 insight.opentelemetry.io/metric-scrape: "true"
 ```
+
+只在 Pod 上配置 scrape annotations，避免 Pod 与 Service 重复采集同一组 metrics。
 
 ## syntheticMetrics
 

@@ -7,6 +7,14 @@ metadata:
 data:
   synthetic_metrics.py: |
 {{ .Files.Get "files/synthetic_metrics.py" | indent 4 }}
+  traffic_profile.py: |
+{{ .Files.Get "files/traffic_profile.py" | indent 4 }}
+  {{- if .Values.phaseDriver.enabled }}
+  phase_driver.py: |
+{{ .Files.Get "files/phase_driver.py" | indent 4 }}
+  node-inventory.json: |
+{{ .Values.phaseDriver.inventory | indent 4 }}
+  {{- end }}
   config.yaml: |
     port: {{ .Values.config.port }}
     model: "{{ .Values.config.model }}"

@@ -2,6 +2,8 @@
 
 默认只同步 fake GPU utilization。模型 QPS、Token 吞吐、TTFT、TPOT 和 KV cache 由 Pod 内的 synthetic metrics exporter 自主生成，无需向 simulator 发送大请求。
 
+正常安装路径会由常驻 `phase-driver` Deployment 完成 GPU 联动；本脚本保留用于本地调试和真实接口验证，不再是 Dashboard 持续出数的前置条件。
+
 如需验证真实 OpenAI `/v1/completions` 接口，设置 `SYNTHETIC_METRICS=false`；该模式是接口压测，不用于 Dashboard 数值模拟。
 
 ## 前置
@@ -11,7 +13,7 @@ export KUBECONFIG=/path/to/kubeconfig
 kubectl -n llm-sim get pod  # 确认 5 个 multi-model Pod 存在
 ```
 
-## 方式一：Port-forward（推荐）
+## 方式一：本地 Port-forward 调试
 
 本地运行，自动建 `kubectl port-forward` 隧道直连 Pod，绕过 Service Mesh（Istio/Envoy）拦截。
 
@@ -72,6 +74,8 @@ export TARGET_IPS="10.244.1.204:8001:GLM-5.2:24,10.244.1.205:8005:Qwen3.7-Plus:2
 synthetic exporter 的 `normal` 中心为约 `63 req/s` 和 `4.45M tok/s`，Token 口径是 prompt 与 generation 之和。五个模型按截图目标比例归一化，并使用 3–7 分钟阶段、平滑过渡和有界漂移，使现有 `rate(...[5m])` 仍能看到合理波动。
 
 GPU 联动仅在阶段切换时异步更新，并按 node label 使用不同区间。inventory、kubectl 或 shadow pod 不可用时，bench 会打印一次禁用提示并继续运行。可用 `GPU_SHADOW_SYNC=false` 显式关闭。
+
+常驻 driver 使用加权随机阶段转移、120–480 秒随机时长和每次重启的新随机序列；shadow GPU exporter 继续在阶段区间内产生短周期噪声，因此不会呈现固定轮转曲线。
 
 ## 验证
 

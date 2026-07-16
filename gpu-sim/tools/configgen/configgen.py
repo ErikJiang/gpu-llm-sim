@@ -76,7 +76,7 @@ def die(msg: str, code: int = 1) -> None:
 
 
 def slug(s: str) -> str:
-    """把 'NVIDIA H200 141GB HBM3e' 转成 'h200-141gb-hbm3e'。"""
+    """把 'BEST300 288GB' 转成 'best300-288gb'。"""
     s = s.lower()
     s = re.sub(r"^nvidia[\s_-]*", "", s)
     s = re.sub(r"[^a-z0-9]+", "-", s)
@@ -193,8 +193,21 @@ def validate_config(cfg: dict) -> list[str]:
             errs.append(f"{prefix}.workload must be a mapping")
         elif workload is not None:
             release = workload.get("modelRelease")
-            if not isinstance(release, str) or not re.match(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", release):
+            if release is not None and (
+                not isinstance(release, str)
+                or not re.match(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", release)
+            ):
                 errs.append(f"{prefix}.workload.modelRelease '{release}' invalid (must be RFC1123)")
+            shadow_gpu_count = workload.get("gpuCount")
+            if (
+                not isinstance(shadow_gpu_count, int)
+                or isinstance(shadow_gpu_count, bool)
+                or shadow_gpu_count < 1
+                or shadow_gpu_count > gpu.get("count", 0)
+            ):
+                errs.append(
+                    f"{prefix}.workload.gpuCount must be between 1 and gpu.count"
+                )
             utilization = workload.get("utilization")
             match = re.fullmatch(r"(\d{1,3})-(\d{1,3})", str(utilization or ""))
             if not match or int(match.group(1)) > int(match.group(2)) or int(match.group(2)) > 100:
@@ -396,6 +409,7 @@ def build_kwok_nodes(cfg: dict, node_to_pool: dict[str, str]) -> list[dict]:
                 "name": name,
                 "labels": {
                     "type": "kwok",
+                    "app.kubernetes.io/managed-by": "gpu-sim",
                     "kubernetes.io/os": "linux",
                     "kubernetes.io/arch": architecture,
                     "kubernetes.io/hostname": name,
@@ -444,10 +458,14 @@ def build_node_inventory(cfg: dict, node_to_pool: dict[str, str]) -> dict:
     """生成 shadow workload 需要的节点/GPU 清单。"""
     nodes: list[dict] = []
     total_gpus = 0
+    total_shadow_gpus = 0
     for n in cfg["nodes"]:
         gpu = n["gpu"]
         gpu_count = gpu["count"]
+        workload = n.get("workload") or {}
+        shadow_gpu_count = workload.get("gpuCount", 0)
         total_gpus += gpu_count
+        total_shadow_gpus += shadow_gpu_count
         nodes.append({
             "name": n["name"],
             "pool": node_to_pool[n["name"]],
@@ -456,15 +474,18 @@ def build_node_inventory(cfg: dict, node_to_pool: dict[str, str]) -> dict:
             "architecture": n.get("architecture", "amd64"),
             "gpuProduct": gpu["product"],
             "gpuCount": gpu_count,
+            "shadowGpuCount": shadow_gpu_count,
             "gpuMemoryMiB": gpu["memoryMiB"],
             "tflopsFP32": gpu.get("tflopsFP32"),
-            "modelRelease": (n.get("workload") or {}).get("modelRelease", ""),
-            "utilization": (n.get("workload") or {}).get("utilization", ""),
+            "modelRelease": workload.get("modelRelease", ""),
+            "utilization": workload.get("utilization", ""),
         })
     return {
         "namespace": cfg.get("namespace") or DEFAULT_NAMESPACE,
         "nodes": nodes,
         "totalGpuCount": total_gpus,
+        "totalShadowGpuCount": total_shadow_gpus,
+        "totalShadowPodCount": sum(1 for node in nodes if node["shadowGpuCount"]),
     }
 
 
@@ -528,6 +549,10 @@ def render_plan(cfg: dict, node_to_pool: dict[str, str], image_replacements: int
     lines.append(f"namespace     : {cfg.get('namespace') or DEFAULT_NAMESPACE}")
     lines.append(f"releaseName   : {cfg.get('releaseName') or DEFAULT_RELEASE}")
     lines.append(f"node count    : {len(cfg['nodes'])}")
+    lines.append(f"GPU capacity  : {sum(n['gpu']['count'] for n in cfg['nodes'])}")
+    lines.append(
+        f"shadow GPUs   : {sum((n.get('workload') or {}).get('gpuCount', 0) for n in cfg['nodes'])}"
+    )
     pool_count = len(set(node_to_pool.values()))
     lines.append(f"pool count    : {pool_count}")
     lines.append(f"image rewrites: {image_replacements}")
@@ -549,7 +574,9 @@ def render_plan(cfg: dict, node_to_pool: dict[str, str], image_replacements: int
             f"  {n['name']}  ->  {node_to_pool[n['name']]}  "
             f"(arch={n.get('architecture', 'amd64')} cpu={n.get('cpu', NODE_CPU)} "
             f"memory={n.get('memory', NODE_MEMORY)} gpu={n['gpu']['count']} "
-            f"model={workload.get('modelRelease', 'idle')} util={workload.get('utilization', 'idle')})"
+            f"shadow={workload.get('gpuCount', 0)} "
+            f"model={workload.get('modelRelease', 'unassigned')} "
+            f"util={workload.get('utilization', 'idle')})"
         )
     return "\n".join(lines) + "\n"
 

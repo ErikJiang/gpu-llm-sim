@@ -6,15 +6,15 @@
 
 ## 模型清单
 
-| Release | Dashboard / API 模型名 | Tokenizer repository | Context | 流量权重 | GPU 基线 |
+| Release | Dashboard / API 模型名 | Tokenizer repository | Context | 流量权重 | GPU 绑定 |
 | --- | --- | --- | ---: | ---: | --- |
-| `glm-52` | `GLM-5.2` | `ZhipuAI/GLM-5.2` | 1,000,000 | 24 | 80×GH200 144GB |
-| `deepseek-v4-pro` | `DeepSeek-V4-Pro` | `deepseek-ai/DeepSeek-V4-Pro` | 1,000,000 | 17 | 48×H200 141GB |
-| `minimax-m3` | `MiniMax-M3` | `MiniMax/MiniMax-M2.7` | 1,000,000 | 20 | 16×H100 80GB |
-| `kimi-k27-code` | `Kimi-K2.7-Code` | `moonshotai/Kimi-K2.7-Code` | 262,144 | 19 | 16×H100 80GB |
-| `qwen37-plus` | `Qwen3.7-Plus` | `Qwen/Qwen3.6-27B` | 1,000,000 | 20 | 12×H100 80GB |
+| `glm-52` | `GLM-5.2` | `ZhipuAI/GLM-5.2` | 1,000,000 | 24 | 未绑定 |
+| `deepseek-v4-pro` | `DeepSeek-V4-Pro` | `deepseek-ai/DeepSeek-V4-Pro` | 1,000,000 | 17 | 未绑定 |
+| `minimax-m3` | `MiniMax-M3` | `MiniMax/MiniMax-M2.7` | 1,000,000 | 20 | 未绑定 |
+| `kimi-k27-code` | `Kimi-K2.7-Code` | `moonshotai/Kimi-K2.7-Code` | 262,144 | 19 | 未绑定 |
+| `qwen37-plus` | `Qwen3.7-Plus` | `Qwen/Qwen3.6-27B` | 1,000,000 | 20 | 未绑定 |
 
-`MiniMax-M3` 使用 vLLM 支持的 `MiniMax/MiniMax-M2.7` tokenizer，规避 M3 架构不受当前 render 镜像支持的问题。`Qwen3.7-Plus` 是 API 产品名，公开的 `Qwen/Qwen3.6-27B` 仅作为兼容 tokenizer 来源；Dashboard 不会显示替代仓库名。A100 与 V100 共 20 张作为 idle reserve，不绑定前沿模型。
+`MiniMax-M3` 使用 vLLM 支持的 `MiniMax/MiniMax-M2.7` tokenizer，规避 M3 架构不受当前 render 镜像支持的问题。`Qwen3.7-Plus` 是 API 产品名，公开的 `Qwen/Qwen3.6-27B` 仅作为兼容 tokenizer 来源；Dashboard 不会显示替代仓库名。GPU simulator 独立模拟 512 张 `BEST300 288GB`，默认不虚构模型绑定。
 
 `models.env` 的 `REVISION` 默认为 `master`。生产演示需完全复现时，应替换为 ModelScope 仓库实际 tag/commit；chart 已将该值传给 `snapshot_download(revision=...)`。
 
@@ -66,19 +66,28 @@ NAMESPACE=llm-sim ./uninstall.sh  # 幂等：未装自动跳
 
 ### 运行指标模拟
 
-模型 Pod 内的 synthetic exporter 会在 `:9090/metrics` 自主生成 `vllm:*` 指标；`bench.sh` 默认只联动 GPU 波动。详见 [bench.md](bench.md)。
+模型 Pod 内的 synthetic exporter 会在 `:9090/metrics` 自主生成 `vllm:*` 指标。若安装时存在 `gpu-sim/generated/node-inventory.json`，`make install-llm` 还会部署单副本 `phase-driver`，在集群内持续联动 GPU 波动，不依赖本地终端。
 
 ```bash
+# 仅在本地调试 driver 或验证真实接口时使用
 NAMESPACE=llm-sim DURATION=30m ./bench.sh
 ```
 
-exporter 以约 63 req/s、约 4.45M prompt + generation tok/s 为 `normal` 中心，按目标模型比例分配并生成分钟级业务阶段和有界漂移，确保 Prometheus `[5m]` 查询窗口仍有明显但合理的波动。若 `gpu-sim/generated/node-inventory.json` 存在，bench 还会按节点联动 shadow GPU utilization。设置 `SYNTHETIC_METRICS=false` 可恢复真实接口流量。
+exporter 以约 63 req/s、约 4.45M prompt + generation tok/s 为 `normal` 中心，按目标模型比例分配并生成加权随机阶段、随机持续时间和平滑有界漂移，确保 Prometheus `[5m]` 查询窗口仍有明显但不呈固定周期的波动。`phase-driver` 使用同一随机阶段模型按节点更新 shadow GPU utilization；设置 `SYNTHETIC_METRICS=false` 可用本地 bench 验证真实接口流量。
 
 ## 验证
 
 ```bash
 # 5 个 Deployment / Service / Pod 应全 Running
 kubectl get deploy,svc,pod -n llm-sim
+
+# phase-driver 应持续运行；日志中的 phase 顺序和 next 秒数不是固定周期
+kubectl -n llm-sim get deploy,pod -l app.kubernetes.io/component=phase-driver
+kubectl -n llm-sim logs deploy/glm-52-multi-model-phase-driver -f
+
+# RBAC 只允许 get/list/patch demo namespace 中的 Pod
+kubectl auth can-i --as=system:serviceaccount:llm-sim:glm-52-multi-model-phase-driver get pods -n demo
+kubectl auth can-i --as=system:serviceaccount:llm-sim:glm-52-multi-model-phase-driver delete pods -n demo
 
 # 指标端点自测
 POD=$(kubectl -n llm-sim get pod -l app.kubernetes.io/instance=glm-52 -o name | head -1)
@@ -100,6 +109,8 @@ Insight collector 启用 `insight.opentelemetry.io/*` 注解扫描后，自动�
 | `MODELSCOPE_CACHE` | `/root/.cache/modelscope` | 容器内 ModelScope 缓存路径 |
 | `HF_TOKEN` | 空 | ModelScope 公开模型无需 |
 | `REMOVE_LEGACY_RELEASES` | `true` | 安装新清单前卸载旧 simulator release；设为 `false` 可跳过 |
+| `GPU_WORKLOAD_NAMESPACE` | `demo` | phase driver 更新 shadow Pod 的命名空间 |
+| `GPU_INVENTORY` | `../gpu-sim/generated/node-inventory.json` | GPU 基线清单；不存在时跳过 phase driver |
 
 五个 profile 使用不同固定 seed，每个实例配置 64 个 `maxNumSeqs` 和 393,216 个 KV blocks，可容纳 64 个最长约 95k tokens 的并发请求。高峰期 running requests 接近槽位上限时，`timeFactorUnderLoad` 会放大 TTFT/TPOT；这些值用于指标仿真，不代表模型服务真实硬件的绝对批处理上限。
 

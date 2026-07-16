@@ -7,8 +7,8 @@
 #   - 用 env 变量覆盖 util/memory/镜像/namespace
 #
 # Usage:
-#   ./demo.sh                                # 默认 30-50% util, 1000-2000 MiB mem
-#   DEMO_UTIL="60-80" ./demo.sh              # 改 util
+#   ./demo.sh                                # 默认 65-90% util, 1000-2000 MiB mem
+#   DEMO_UTIL="65-90" ./demo.sh              # 改 util
 #   DEMO_MEM_USED="5000-8000" ./demo.sh      # 改 memory
 #   DEMO_GPU_REQUEST=1 ./demo.sh             # 每节点只申请 1 张 fake GPU
 #   DEMO_NAMESPACE=infra ./demo.sh           # 改 namespace
@@ -37,11 +37,11 @@ err()  { printf "${RED}[demo] ✗${NC} %s\n" "$*" >&2; }
 
 # —— 默认值 ——
 # fgo 的 status-updater 把 "simulated-gpu-utilization" / "simulated-gpu-memory"
-# 这两个 annotation 解释为 "min-max" 区间（如 "30-50"），不要展成 csv。
+# 这两个 annotation 解释为 "min-max" 区间（如 "65-90"），不要展成 csv。
 # 注意：fgo KWOK 模式 status-updater 只解析 utilization，不解析 memory
 #       （memory 固定 = 该池 gpuMemory），所以 DEMO_MEM_USED 实际无效，
 #       仅作为注释保留以便后续 fgo 升级或 PR 跟进。
-DEMO_UTIL="${DEMO_UTIL:-30-50}"
+DEMO_UTIL="${DEMO_UTIL:-65-90}"
 DEMO_MEM_USED="${DEMO_MEM_USED:-1000-2000}"
 DEMO_GPU_REQUEST="${DEMO_GPU_REQUEST:-all}"
 DEMO_IMAGE="${DEMO_IMAGE:-registry.k8s.io/pause:3.9}"
@@ -76,7 +76,7 @@ fi
 
 # —— 创建模式 ——
 log "creating demo pods in namespace '$DEMO_NAMESPACE'"
-# fgo 期望 "min-max" 区间字符串（如 "30-50"），不要展成 csv。
+# fgo 期望 "min-max" 区间字符串（如 "65-90"），不要展成 csv。
 log "  util:    $DEMO_UTIL (%)"
 log "  memory:  $DEMO_MEM_USED (MiB)"
 log "  gpu:     $DEMO_GPU_REQUEST per node"
@@ -138,4 +138,4 @@ echo "  kubectl -n ${DEMO_NAMESPACE:-demo} get pods -l app=gpu-sim-demo"
 echo "  kubectl get nodes -l type=kwok -o wide"
 echo
 echo "Adjust util/memory on the fly:"
-echo "  DEMO_UTIL=\"80-95\" ./demo.sh --delete    # delete + recreate with new util"
+echo "  DEMO_UTIL=\"65-90\" ./demo.sh --delete    # delete + recreate with new util"

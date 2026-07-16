@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# workload.sh — create one shadow Pod per fake GPU slot to drive fake GPU metrics.
+# workload.sh — create one multi-GPU shadow Pod per configured KWOK node.
 #
 # Usage:
 #   ./workload.sh apply
 #   ./workload.sh delete
-#   WORKLOAD_UTIL="80-95" ./workload.sh set-util
+#   WORKLOAD_UTIL="65-90" ./workload.sh set-util
 
 set -euo pipefail
 
@@ -108,14 +108,15 @@ with open('$GENERATED_DIR/node-inventory.json', encoding='utf-8') as f:
 
 for node in sorted(inv['nodes'], key=lambda item: item['name']):
     release = node.get('modelRelease', '')
-    if not release:
+    shadow_gpu_count = int(node.get('shadowGpuCount', 0))
+    if shadow_gpu_count <= 0:
         continue
-    if release not in models:
+    if release and release not in models:
         raise SystemExit(f'modelRelease {release!r} is not defined in models.env')
-    model = models[release]
+    model = models[release] if release else 'unassigned'
+    release = release or 'unassigned'
     utilization = os.environ.get('WORKLOAD_UTIL') or node['utilization']
-    for gpu_index in range(int(node['gpuCount'])):
-        print(node['name'], node['pool'], gpu_index, release, model, utilization)
+    print(node['name'], node['pool'], shadow_gpu_count, release, model, utilization)
 ")
 
 if [ -z "$SLOTS" ]; then
@@ -126,11 +127,11 @@ fi
 TMPDIR=$(mktemp -d)
 trap "rm -rf $TMPDIR" EXIT
 
-while read -r node pool gpu_index release model utilization; do
-  out="$TMPDIR/gpu-load-$node-$gpu_index.yaml"
+while read -r node pool gpu_request release model utilization; do
+  out="$TMPDIR/gpu-load-$node.yaml"
   sed -e "s|{{NODE_NAME}}|$node|g" \
       -e "s|{{POOL_NAME}}|$pool|g" \
-      -e "s|{{GPU_INDEX}}|$gpu_index|g" \
+      -e "s|{{GPU_REQUEST}}|$gpu_request|g" \
       -e "s|{{MODEL_RELEASE}}|$release|g" \
       -e "s|{{MODEL_NAME}}|$model|g" \
       -e "s|{{WORKLOAD_UTIL}}|$utilization|g" \
@@ -138,7 +139,7 @@ while read -r node pool gpu_index release model utilization; do
       -e "s|{{WORKLOAD_IMAGE}}|$WORKLOAD_IMAGE|g" \
       -e "s|{{WORKLOAD_NAMESPACE}}|$WORKLOAD_NAMESPACE|g" \
       "$TEMPLATE_FILE" > "$out"
-  log "  applying: gpu-load-$node-$gpu_index release=$release util=$utilization"
+  log "  applying: gpu-load-$node gpu=$gpu_request release=$release util=$utilization"
   kubectl apply -f "$out"
 done <<< "$SLOTS"
 

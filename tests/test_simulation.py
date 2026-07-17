@@ -280,9 +280,16 @@ class TrafficProfileTests(unittest.TestCase):
         metrics = load_synthetic_metrics()
         passing = set()
         p99 = {}
+        seeds = {
+            "DeepSeek-V4-Pro": 41001,
+            "GLM-5.2": 41002,
+            "MiniMax-M3": 41003,
+            "Kimi-K2.7-Code": 41004,
+            "Qwen3.7-Plus": 41005,
+        }
 
-        for index, model in enumerate(metrics.LATENCY_PROFILES):
-            state = metrics.SyntheticMetrics(model, weight=20, seed=41000 + index)
+        for model in metrics.LATENCY_PROFILES:
+            state = metrics.SyntheticMetrics(model, weight=20, seed=seeds[model])
             state.advance(300.0, load=1.6)
             within_sla = state.ttft.buckets[state.ttft.bounds.index(0.5)] / state.ttft.count
             if within_sla >= 0.99:
@@ -299,8 +306,8 @@ class TrafficProfileTests(unittest.TestCase):
                 previous_count, previous_bound = count, bound
 
         self.assertEqual(passing, {"Kimi-K2.7-Code", "Qwen3.7-Plus"})
-        self.assertLessEqual(p99["Kimi-K2.7-Code"], 0.49)
-        self.assertLessEqual(p99["Qwen3.7-Plus"], 0.46)
+        self.assertLessEqual(p99["Kimi-K2.7-Code"], 0.40)
+        self.assertLessEqual(p99["Qwen3.7-Plus"], 0.375)
 
 
 class PhaseDriverTests(unittest.TestCase):
